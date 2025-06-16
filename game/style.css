@@ -23,6 +23,7 @@ body {
   background: white;
   clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
   border: 1px solid #000;
+  transform: translate(-50%, -50%);
 }
 
 .character {

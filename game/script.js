@@ -11,7 +11,10 @@ function axialToPixel(q, r) {
 }
 
 function iso(x, y) {
-  return { x: x - y, y: (x + y) / 2 };
+  // The container is already transformed with rotateX to get an
+  // isometric view, so no additional coordinate conversion is
+  // required here.
+  return { x, y };
 }
 
 for (let q = 0; q < GRID_SIZE; q++) {

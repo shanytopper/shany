@@ -1,3 +1,8 @@
+// Grid and character logic for the isometric hex game prototype.
+// This script positions a hexagonal grid and moves a character across it
+// using keyboard controls. The character is represented by a div which we
+// style via CSS. See style.css for the sprite setup.
+
 const GRID_SIZE = 5;
 const SIZE = 50; // hex radius
 const game = document.getElementById('game');
@@ -17,6 +22,8 @@ function iso(x, y) {
   return { x, y };
 }
 
+// Precompute positions of all tiles and record min/max extents so that
+// we can centre the board in the viewport.
 for (let q = 0; q < GRID_SIZE; q++) {
   for (let r = 0; r < GRID_SIZE; r++) {
     const { x, y } = axialToPixel(q, r);
@@ -43,6 +50,7 @@ function createTiles() {
   });
 }
 
+// Character state and element
 let character = { q: 2, r: 2 };
 const charDiv = document.createElement('div');
 charDiv.className = 'character';
@@ -68,6 +76,7 @@ function moveCharacter(dq, dr) {
   }
 }
 
+// Keyboard controls for the six possible movement directions on a pointy-top hex grid.
 document.addEventListener('keydown', e => {
   switch (e.key) {
     case 'ArrowUp':
@@ -93,6 +102,6 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// Initialise the board and character position.
 createTiles();
 updateCharacter();
-

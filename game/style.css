@@ -1,3 +1,4 @@
+/* Base styles for the isometric hex grid prototype */
 body {
   margin: 0;
   background: #222;
@@ -6,32 +7,45 @@ body {
   align-items: center;
   height: 100vh;
 }
+
 #game {
   width: 800px;
   height: 600px;
   background: #555;
+  /* rotate the container for an isometric effect */
   transform: perspective(800px) rotateX(45deg);
   transform-style: preserve-3d;
   position: relative;
   overflow: visible;
 }
 
+/* Hexagonal tile. The width and height correspond to twice the hex radius and
+   sqrt(3)/2 * width respectively (for a pointy-top hex). */
 .tile {
   position: absolute;
   width: 100px;
-  height: 86.6px; /* size * sqrt(3)/2 for pointy hex */
+  height: 86.6px; /* SIZE * sqrt(3) / 2 for pointy hex */
   background: white;
   clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
   border: 1px solid #000;
+  /* centre the tile on its coordinate */
   transform: translate(-50%, -50%);
 }
 
+/* Character sprite. We use a PNG sprite of a soldier downloaded from
+   OpenGameArt.org (CC0 licence). Adjust the width/height to match the
+   sprite resolution. Remove the border-radius to avoid a circular dot. */
 .character {
   position: absolute;
-  width: 40px;
-  height: 40px;
-  background: red;
-  border-radius: 50%;
-  transform: translate(-20px, -20px);
+  /* Use the cropped and transparent player sprite (26x33 px).  The size
+     values are chosen to preserve the sprite's aspect ratio while fitting it
+     comfortably on a hex tile. */
+  width: 30px;
+  height: 38px;
+  background-image: url('player_sprite.png');
+  background-repeat: no-repeat;
+  background-size: contain;
+  /* Centre the sprite on its position by offsetting half its width and height */
+  transform: translate(-15px, -19px);
   z-index: 10;
 }

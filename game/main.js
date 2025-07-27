@@ -22,6 +22,12 @@
   const MOVE_DURATION = 400;  // milliseconds to traverse a single tile
   const ROTATION_STEP = 30;   // degrees to rotate the camera/grid when Q/E is pressed
 
+  // Amplitudes controlling how far the arms and legs swing during
+  // movement.  Adjust these constants to change the character’s
+  // walking animation.  Values are in radians.
+  const ARM_SWING = Math.PI / 6; // ~30°
+  const LEG_SWING = Math.PI / 8; // ~22.5°
+
   // Axial direction vectors for a pointy‑top hex grid.  These are
   // identical to those used in the original JavaScript version.  The keys
   // are provided for clarity; we iterate the values when expanding
@@ -46,6 +52,11 @@
   let isAnimating = false;   // flag to prevent concurrent animations
   let cameraAngle = 0;       // current rotation angle of the grid about the Y axis
   let raycaster, mouse;
+
+  // Limb groups for animation.  These are populated when the avatar is
+  // created.  Storing references at module scope allows the animation
+  // routines to access and rotate the limbs each frame of a movement.
+  let leftArmGroup, rightArmGroup, leftLegGroup, rightLegGroup;
 
   // Entry point – sets up the scene, builds the grid and binds
   // interaction handlers.  Invoked immediately after definition.
@@ -205,50 +216,112 @@
     const torsoMesh = new THREE.Mesh(torsoGeom, torsoMat);
     group.add(torsoMesh);
 
-    // Legs: two short cylinders extending downward from the torso.
+    // Legs: each leg is a group with its own pivot at the hip to allow
+    // animation.  A cylinder is created with its local origin at the top
+    // (hip) so that rotating the group causes the leg to swing
+    // forward/backwards around the hip joint.  Two leg groups are
+    // positioned relative to the torso.
     const legGeom = new THREE.CylinderGeometry(legRadius, legRadius, legHeight, 12);
-    // Position relative to the torso; base at y=0.
-    legGeom.translate(0, legHeight / 2, 0);
+    // Shift the geometry so the hip joint is at the group's origin.
+    legGeom.translate(0, -legHeight / 2, 0);
     const legMat  = new THREE.MeshStandardMaterial({ color: 0x2e4372 });
-    const leftLeg  = new THREE.Mesh(legGeom.clone(), legMat);
-    const rightLeg = new THREE.Mesh(legGeom.clone(), legMat);
-    const legOffsetX = bodyRadius * 0.4;
-    leftLeg.position.set(-legOffsetX, 0, 0);
-    rightLeg.position.set( legOffsetX, 0, 0);
-    group.add(leftLeg);
-    group.add(rightLeg);
+    // Left leg
+    leftLegGroup = new THREE.Group();
+    leftLegGroup.position.set(-bodyRadius * 0.4, 0, 0);
+    const leftLegMesh = new THREE.Mesh(legGeom, legMat);
+    leftLegGroup.add(leftLegMesh);
+    group.add(leftLegGroup);
+    // Right leg
+    rightLegGroup = new THREE.Group();
+    rightLegGroup.position.set(bodyRadius * 0.4, 0, 0);
+    const rightLegMesh = new THREE.Mesh(legGeom.clone(), legMat);
+    rightLegGroup.add(rightLegMesh);
+    group.add(rightLegGroup);
 
-    // Arms: slender cylinders oriented horizontally (along the X axis)
-    // and attached at mid‑torso height.
+    // Arms: similarly, create arm groups with local origins at the
+    // shoulder.  Arms hang downwards initially (aligned along the
+    // negative Y axis) and will swing forward/backwards by rotating
+    // around the X axis.  Attach arms near the top of the torso.
     const armGeom = new THREE.CylinderGeometry(armRadius, armRadius, armLength, 12);
-    // Rotate so that the cylinder's length extends along the X axis.
-    armGeom.rotateZ(Math.PI / 2);
-    // Translate so that its centre is at origin; rotation above affects pivot.
-    armGeom.translate(0, 0, 0);
+    // Position the geometry so the shoulder is at the origin; the
+    // cylinder extends downward from the origin.
+    armGeom.translate(0, -armLength / 2, 0);
     const armMat  = new THREE.MeshStandardMaterial({ color: 0x2e4372 });
-    const leftArm  = new THREE.Mesh(armGeom.clone(), armMat);
-    const rightArm = new THREE.Mesh(armGeom.clone(), armMat);
-    const armHeight = bodyHeight * 0.5;
-    const armOffsetX = bodyRadius + armLength / 2;
-    leftArm.position.set(-armOffsetX, armHeight, 0);
-    rightArm.position.set( armOffsetX, armHeight, 0);
-    group.add(leftArm);
-    group.add(rightArm);
+    const shoulderHeight = bodyHeight * 0.8;
+    // Left arm
+    leftArmGroup = new THREE.Group();
+    leftArmGroup.position.set(-bodyRadius - armRadius * 0.5, shoulderHeight, 0);
+    const leftArmMesh = new THREE.Mesh(armGeom, armMat);
+    leftArmGroup.add(leftArmMesh);
+    group.add(leftArmGroup);
+    // Right arm
+    rightArmGroup = new THREE.Group();
+    rightArmGroup.position.set(bodyRadius + armRadius * 0.5, shoulderHeight, 0);
+    const rightArmMesh = new THREE.Mesh(armGeom.clone(), armMat);
+    rightArmGroup.add(rightArmMesh);
+    group.add(rightArmGroup);
 
-    // Head: sphere on top of the torso.
+    // Head and facial features.  Create a group to contain the head mesh,
+    // eyes, pupils, mouth and helmet.  Position this group atop the
+    // torso so that all children inherit the same transform and rotate
+    // together with the avatar.
+    const headGroup = new THREE.Group();
+    headGroup.position.set(0, bodyHeight + headRadius, 0);
+
+    // Primary head sphere
     const headGeom = new THREE.SphereGeometry(headRadius, 16, 12);
-    headGeom.translate(0, bodyHeight + headRadius, 0);
     const headMat  = new THREE.MeshStandardMaterial({ color: 0xffd7b1 });
     const headMesh = new THREE.Mesh(headGeom, headMat);
-    group.add(headMesh);
+    headGroup.add(headMesh);
 
-    // Helmet: a hemisphere (half‑sphere) slightly larger than the head.
-    // We create a full sphere and use the phiLength to cut it in half.
+    // Eyes: white spheres with black pupils.  Create a helper function
+    // to generate an eye given an offset along X.
+    const eyeRadius   = headRadius * 0.2;
+    const pupilRadius = eyeRadius * 0.4;
+    function createEye(offsetX) {
+      const eyeGroup = new THREE.Group();
+      const scleraGeom = new THREE.SphereGeometry(eyeRadius, 8, 8);
+      const scleraMat  = new THREE.MeshStandardMaterial({ color: 0xffffff });
+      const scleraMesh = new THREE.Mesh(scleraGeom, scleraMat);
+      eyeGroup.add(scleraMesh);
+      const pupilGeom  = new THREE.SphereGeometry(pupilRadius, 8, 8);
+      const pupilMat   = new THREE.MeshStandardMaterial({ color: 0x111111 });
+      const pupilMesh  = new THREE.Mesh(pupilGeom, pupilMat);
+      pupilMesh.position.set(0, 0, eyeRadius * 0.6);
+      eyeGroup.add(pupilMesh);
+      // Position the eye group relative to the head centre.  Eyes
+      // protrude slightly along the Z axis (forward) and are offset
+      // horizontally by offsetX and vertically slightly above the midline.
+      eyeGroup.position.set(offsetX, eyeRadius * 0.2, headRadius * 0.8);
+      return eyeGroup;
+    }
+    const leftEye  = createEye(-headRadius * 0.4);
+    const rightEye = createEye( headRadius * 0.4);
+    headGroup.add(leftEye);
+    headGroup.add(rightEye);
+
+    // Mouth: a small capsule/cylinder indicating a smile.  Use a thin
+    // cylinder rotated to lay horizontal.  The mouth is positioned
+    // slightly below the centre of the face and protrudes forward a bit.
+    const mouthGeom = new THREE.CylinderGeometry(headRadius * 0.05, headRadius * 0.05, headRadius * 0.5, 8);
+    // Rotate the cylinder so it lies horizontally (along the X axis).
+    mouthGeom.rotateZ(Math.PI / 2);
+    const mouthMat  = new THREE.MeshStandardMaterial({ color: 0xcc5544 });
+    const mouthMesh = new THREE.Mesh(mouthGeom, mouthMat);
+    mouthMesh.position.set(0, -headRadius * 0.3, headRadius * 0.8);
+    headGroup.add(mouthMesh);
+
+    // Helmet: a hemisphere slightly larger than the head.  Construct a
+    // half sphere with phiLength of π/2 so that only the top cap is
+    // rendered.  The helmet sits on the head with a small downward
+    // offset to cover the forehead.
     const helmetGeom = new THREE.SphereGeometry(helmetRadius, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2);
-    helmetGeom.translate(0, bodyHeight + headRadius * 2, 0);
     const helmetMat  = new THREE.MeshStandardMaterial({ color: 0x555555 });
     const helmetMesh = new THREE.Mesh(helmetGeom, helmetMat);
-    group.add(helmetMesh);
+    helmetMesh.position.set(0, headRadius * 0.3, 0);
+    headGroup.add(helmetMesh);
+
+    group.add(headGroup);
 
     // Scale the avatar slightly to ensure it fits comfortably within a single tile.
     group.scale.set(1, 1, 1);
@@ -258,6 +331,13 @@
     const start = axialToWorld(charPosition.q, charPosition.r);
     group.position.set(start.x, TILE_HEIGHT + 0.02, start.z);
     character = group;
+    // Store limb references on the avatar for easy access during animation.
+    character.userData.limbs = {
+      leftArm: leftArmGroup,
+      rightArm: rightArmGroup,
+      leftLeg: leftLegGroup,
+      rightLeg: rightLegGroup
+    };
     gridGroup.add(character);
   }
 
@@ -485,13 +565,36 @@
         // remain valid and are transformed into world space automatically.
         character.position.x = initial.x + delta.x * t;
         character.position.z = initial.z + delta.z * t;
-        // Keep the arrow slightly above the top of the tile.  Tiles
-        // extend from y=0 to y=TILE_HEIGHT; placing the arrow at
+        // Keep the avatar slightly above the top of the tile.  Tiles
+        // extend from y=0 to y=TILE_HEIGHT; placing the avatar at
         // TILE_HEIGHT+0.02 avoids z‑fighting.
         character.position.y = TILE_HEIGHT + 0.02;
+        // Animate limbs to simulate a walk cycle.  We compute a swing
+        // value using a sine wave that starts and ends at zero during
+        // each movement step.  Arms and legs move in opposite phases to
+        // approximate a natural gait.  If limb references are
+        // available, update their rotations; this check guards against
+        // undefined values in case the avatar hasn’t been fully
+        // initialised.
+        const swing = Math.sin(t * Math.PI);
+        if (character.userData && character.userData.limbs) {
+          const limbs = character.userData.limbs;
+          if (limbs.leftArm)  limbs.leftArm.rotation.x  =  ARM_SWING * swing;
+          if (limbs.rightArm) limbs.rightArm.rotation.x = -ARM_SWING * swing;
+          if (limbs.leftLeg)  limbs.leftLeg.rotation.x  = -LEG_SWING * swing;
+          if (limbs.rightLeg) limbs.rightLeg.rotation.x =  LEG_SWING * swing;
+        }
         if (t < 1) {
           requestAnimationFrame(step);
         } else {
+          // Reset limb rotations to neutral at the end of the step
+          if (character.userData && character.userData.limbs) {
+            const limbs = character.userData.limbs;
+            if (limbs.leftArm)  limbs.leftArm.rotation.x  = 0;
+            if (limbs.rightArm) limbs.rightArm.rotation.x = 0;
+            if (limbs.leftLeg)  limbs.leftLeg.rotation.x  = 0;
+            if (limbs.rightLeg) limbs.rightLeg.rotation.x = 0;
+          }
           resolve();
         }
       }

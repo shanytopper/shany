@@ -108,54 +108,66 @@
   }
 
   /**
-   * Create and position all hex tiles within the grid group.  After
-   * populating the group with meshes the centre of the grid is
-   * computed and the group is translated so that rotation occurs
-   * around the centre.  Each tile is stored in the hexMeshes array for
-   * raycasting.
+   * Create and position all hex tiles within the grid group.  A custom
+   * extruded geometry is used for each tile to ensure the shape and
+   * orientation exactly match the axial coordinate system.  After
+   * populating the group the centre of the grid is computed and the
+   * group is translated so that rotations occur around its centre.
    */
   function createGrid() {
-    // Precompute a geometry for the hexagonal prism.  The geometry is
-    // rotated by 30° (π/6) so that a point faces "north", matching a
-    // pointy‑top hex layout.  We clone this geometry for every tile to
-    // avoid sharing vertex buffers that would complicate material
-    // assignments.
-    const baseGeom = new THREE.CylinderGeometry(HEX_RADIUS, HEX_RADIUS, TILE_HEIGHT, 6, 1);
-    baseGeom.rotateY(Math.PI / 6);
+    // Precompute a pointy‑top hex prism geometry.  The shape is
+    // defined in the XY plane with a vertex at the top (positive Y)
+    // and extruded along the positive Z axis.  It is then rotated
+    // around the X axis so the extrusion lies along the Y axis.  The
+    // resulting prism spans from y=0 to y=TILE_HEIGHT.
+    const baseGeom = (function buildHexPrism() {
+      const shape = new THREE.Shape();
+      for (let i = 0; i < 6; i++) {
+        // Start at 30° so that the first vertex lies at the top of
+        // the hex (pointy‑top orientation).  Subsequent vertices
+        // advance around the circle in 60° increments.
+        const angle = Math.PI / 3 * i + Math.PI / 6;
+        const x = HEX_RADIUS * Math.cos(angle);
+        const y = HEX_RADIUS * Math.sin(angle);
+        if (i === 0) {
+          shape.moveTo(x, y);
+        } else {
+          shape.lineTo(x, y);
+        }
+      }
+      shape.closePath();
+      const extrudeSettings = { depth: TILE_HEIGHT, bevelEnabled: false };
+      const geom = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+      // Rotate so that extrusion extends along the Y axis.
+      geom.rotateX(Math.PI / 2);
+      return geom;
+    })();
 
-    // Collect world positions to calculate the bounding box later.
+    // Collect centre positions to calculate the bounding box later.  We
+    // ignore the y component because centring is only applied in the
+    // horizontal plane.
     const positions = [];
 
     for (let q = 0; q < GRID_SIZE; q++) {
       for (let r = 0; r < GRID_SIZE; r++) {
-        // Clone the base geometry so each tile can have its own material.
         const geom = baseGeom.clone();
-        // Alternate colours for a subtle board effect.  These colours
-        // echo the muted greens and browns of tactical RPGs.
         const isEven = (q + r) % 2 === 0;
         const colour = isEven ? 0x88aa77 : 0x779966;
         const mat = new THREE.MeshStandardMaterial({ color: colour, flatShading: true });
         const mesh = new THREE.Mesh(geom, mat);
-        // Compute world position for this axial coordinate.  Only x and
-        // z are used; the y coordinate is offset so that the top of
-        // each tile sits at y=0.  CylinderGeometry is centred on
-        // y=0 by default and extends equally above and below, so
-        // translating by −TILE_HEIGHT/2 pushes the bottom below the
-        // ground plane and aligns the top with y=0.
+        // Each tile spans from y=0 to y=TILE_HEIGHT, so its base sits at
+        // y=0.  No vertical translation is necessary.  Compute its
+        // horizontal position from axial coordinates.
         const worldPos = axialToWorld(q, r);
-        mesh.position.set(worldPos.x, -TILE_HEIGHT / 2, worldPos.z);
-        // Record axial coordinates on the mesh for later pathfinding.
+        mesh.position.set(worldPos.x, 0, worldPos.z);
         mesh.userData = { q, r };
-        // Add to group and arrays.
         gridGroup.add(mesh);
         hexMeshes.push(mesh);
         positions.push(new THREE.Vector3(worldPos.x, 0, worldPos.z));
       }
     }
-    // Compute bounding box of all positions and centre the grid about
-    // the origin.  Only the x and z coordinates are considered since
-    // all y coordinates are zero.  The group is moved rather than each
-    // child mesh, simplifying subsequent movement logic.
+    // Centre the grid horizontally by translating the group.  The y
+    // coordinate remains zero so that tiles rest on the ground plane.
     const box = new THREE.Box3().setFromPoints(positions);
     const centre = new THREE.Vector3();
     box.getCenter(centre);
@@ -184,10 +196,10 @@
     // has been translated to centre the grid, these local coordinates
     // remain valid.
     const pos = axialToWorld(charPosition.q, charPosition.r);
-    // Position the avatar so its base sits on top of the hex tile.
-    // A small positive y offset prevents z‑fighting between the arrow
-    // and the tile surface.
-    character.position.set(pos.x, 0.01, pos.z);
+    // Position the avatar so its base sits on top of the hex tile.  The
+    // tiles extend from y=0 up to y=TILE_HEIGHT; place the arrow just
+    // above this height to avoid z‑fighting.
+    character.position.set(pos.x, TILE_HEIGHT + 0.02, pos.z);
     gridGroup.add(character);
   }
 
@@ -410,8 +422,10 @@
         // remain valid and are transformed into world space automatically.
         character.position.x = initial.x + delta.x * t;
         character.position.z = initial.z + delta.z * t;
-        // Keep the arrow slightly above the tile to avoid z‑fighting.
-        character.position.y = 0.01;
+        // Keep the arrow slightly above the top of the tile.  Tiles
+        // extend from y=0 to y=TILE_HEIGHT; placing the arrow at
+        // TILE_HEIGHT+0.02 avoids z‑fighting.
+        character.position.y = TILE_HEIGHT + 0.02;
         if (t < 1) {
           requestAnimationFrame(step);
         } else {

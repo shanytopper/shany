@@ -22,9 +22,26 @@ const directionVectors = {
   left: { dq: -1, dr: 0 }      // west
 };
 
-// Track the currently highlighted tile so that we can clear the highlight
-// before applying a new one.
-let currentHighlight = null;
+
+// Map from direction labels to rotation angles for the direction indicator arrow.
+// Angles are measured clockwise in degrees.  The base arrow shape points
+// straight up (0°), and each hex direction rotates in 60° increments.
+const rotationAngles = {
+  up: 0,
+  'up-right': 60,
+  right: 120,
+  down: 180,
+  'down-left': 240,
+  left: 300
+};
+
+// Create a direction indicator element.  It is appended directly to the game
+// container so that it is not affected by the scaling transforms applied to
+// the character sprite.  We update its position and rotation on each
+// movement.
+const directionIndicator = document.createElement('div');
+directionIndicator.className = 'direction-indicator';
+game.appendChild(directionIndicator);
 
 function axialToPixel(q, r) {
   const x = SIZE * Math.sqrt(3) * (q + r / 2);
@@ -101,27 +118,22 @@ function updateCharacter() {
   const scaleX = character.facing === 'left' ? -1 : 1;
   charDiv.style.transform = `translate(-15px, -19px) scaleX(${scaleX})`;
 
-  // Update the highlighted tile based on the character's viewing direction.
-  // Clear any previous highlight.
-  if (currentHighlight) {
-    currentHighlight.classList.remove('highlight');
-    currentHighlight = null;
-  }
-  // Lookup the axial offset for the current direction.
-  const vec = directionVectors[character.dir];
-  if (vec) {
-    const hq = character.q + vec.dq;
-    const hr = character.r + vec.dr;
-    // Only highlight if the target tile is within the grid bounds.
-    if (hq >= 0 && hq < GRID_SIZE && hr >= 0 && hr < GRID_SIZE) {
-      // Find the tile with matching q and r.
-      const tile = tiles.find(t => t.q === hq && t.r === hr);
-      if (tile && tile.element) {
-        tile.element.classList.add('highlight');
-        currentHighlight = tile.element;
-      }
-    }
-  }
+
+  // Position and rotate the direction indicator arrow.  Align its centre
+  // with the character sprite's centre by applying an offset equal to the
+  // negative half of both the character and arrow dimensions.  Then apply
+  // the rotation corresponding to the character's viewing direction.
+  directionIndicator.style.left = charDiv.style.left;
+  directionIndicator.style.top = charDiv.style.top;
+  const angle = rotationAngles[character.dir] ?? 0;
+  // Character dimensions
+  const charW = 30;
+  const charH = 38;
+  const arrowW = 20;
+  const arrowH = 20;
+  const tx = -charW / 2 - arrowW / 2;
+  const ty = -charH / 2 - arrowH / 2;
+  directionIndicator.style.transform = `translate(${tx}px, ${ty}px) rotate(${angle}deg)`;
 }
 
 function moveCharacter(dq, dr) {

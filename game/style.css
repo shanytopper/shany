@@ -35,8 +35,19 @@ body {
 /* Highlighted tile indicates the direction the character is facing.  Use a
    semi-transparent color overlay on the tile to signal which neighboring
    hex the character is looking toward. */
-.tile.highlight {
-  background-color: rgba(255, 255, 0, 0.5);
+
+/* Direction indicator arrow overlay.  This triangular element is appended
+   separately from the character sprite and is rotated to indicate which
+   direction the character is currently facing.  It uses a CSS clip-path to
+   form a triangle pointing upward at 0°; rotations are applied via JS. */
+.direction-indicator {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  background: rgba(255, 255, 0, 0.9);
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  pointer-events: none;
+  z-index: 15;
 }
 
 /* Character sprite. We use a PNG sprite of a soldier downloaded from

@@ -48,18 +48,23 @@ const directionVectors = {
 // visible to the camera.  This swap corrects the earlier off‑by‑one
 // orientation reported by the user.
 const spriteMap = {
-  // Facing west: show the player's left side
-  left:         'player_left.png',
+  // Facing west: show the player's right side
+  left:         'player_right.png',
   // Facing north‑west: show the player's back‑right
   'left-up':    'player_right_up.png',
   // Facing north‑east: show the player's back‑left
   'right-up':   'player_left_up.png',
-  // Facing east: show the player's right side
-  right:        'player_right.png',
-  // Facing south‑east: show the player's front‑right
-  'right-down': 'player_right_down.png',
-  // Facing south‑west: show the player's front‑left
-  'left-down':  'player_left_down.png'
+  // Facing east: show the player's left side
+  right:        'player_left.png',
+  // Facing south‑east: show the player's front‑left
+  'right-down': 'player_left_down.png',
+  // Facing south‑west: show the player's front‑right
+  'left-down':  'player_right_down.png'
+  ,
+  // Pure up and down orientations used when the camera rotates the
+  // world directions to align vertically.
+  up:           'player_up.png',
+  down:         'player_down.png'
 };
 
 /**
@@ -96,9 +101,147 @@ for (let q = 0; q < GRID_SIZE; q++) {
   }
 }
 
-// Offsets centre the grid within the #game container.
-const offsetX = (game.offsetWidth - (maxX - minX)) / 2 - minX;
-const offsetY = (game.offsetHeight - (maxY - minY)) / 2 - minY;
+// Camera angle in degrees.  This controls how the world is rotated
+// when drawn.  It is initialised to 0 (no rotation) and can be
+// incremented or decremented by pressing E or Q on the keyboard.  The
+// value wraps around 360 degrees.
+let cameraAngle = 0;
+
+// Current offsets for positioning tiles and the character.  These
+// values are recalculated whenever the camera rotates.  They shift
+// the rotated coordinates so that the grid remains centred within
+// the #game container.
+let currentOffsetX = 0;
+let currentOffsetY = 0;
+
+// Basis vectors for the axial coordinate system in pixel space when
+// the camera is unrotated.  In a pointy‑top hex grid the q axis is
+// horizontal (pointing east) and the r axis points down and to the
+// right.
+const basisQ = { x: SIZE * Math.sqrt(3), y: 0 };
+const basisR = { x: SIZE * Math.sqrt(3) / 2, y: SIZE * 1.5 };
+
+// Rotated basis vectors for the current camera angle.  These are
+// updated in updateAllTiles() and used by updateCharacter() to
+// position the character.  They are objects with x and y
+// properties.
+let rotBasisQ = { x: basisQ.x, y: basisQ.y };
+let rotBasisR = { x: basisR.x, y: basisR.y };
+
+// Rotate a point (x, y) by the given angle (in degrees) around the
+// origin.  Positive angles rotate counter‑clockwise.
+function rotatePoint(x, y, angleDeg) {
+  const rad = angleDeg * Math.PI / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return {
+    x: x * cos - y * sin,
+    y: x * sin + y * cos
+  };
+}
+
+// Update all tiles' positions based on the current camera angle.
+// This function rotates the precomputed world positions and then
+// centres the grid by computing a bounding box.  It also stores
+// currentOffsetX/Y for use by the character positioning.
+function updateAllTiles() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  // Compute rotated basis vectors for the current camera angle.  These
+  // define how the axial q and r axes map into pixel space.
+  rotBasisQ = rotatePoint(basisQ.x, basisQ.y, cameraAngle);
+  rotBasisR = rotatePoint(basisR.x, basisR.y, cameraAngle);
+  // First compute rotated coordinates and bounding box
+  tiles.forEach(t => {
+    // Use the rotated basis to position this tile
+    const x = rotBasisQ.x * t.q + rotBasisR.x * t.r;
+    const y = rotBasisQ.y * t.q + rotBasisR.y * t.r;
+    t.rotX = x;
+    t.rotY = y;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  });
+  // Compute offsets so that the rotated grid is centred in the game
+  currentOffsetX = (game.offsetWidth - (maxX - minX)) / 2 - minX;
+  currentOffsetY = (game.offsetHeight - (maxY - minY)) / 2 - minY;
+  // Apply positions to tile DOM elements
+  tiles.forEach(t => {
+    t.element.style.left = (t.rotX + currentOffsetX) + 'px';
+    t.element.style.top  = (t.rotY + currentOffsetY) + 'px';
+    // Rotate the tile shape itself so that it aligns with the rotated
+    // grid.  Without this rotation the hex appears skewed when the
+    // camera turns.  The translate(-50%,-50%) centres the element
+    // about its coordinate, so applying rotation afterwards rotates
+    // around its centre.
+    t.element.style.transform = `translate(-50%, -50%) rotate(${cameraAngle}deg)`;
+  });
+}
+
+/**
+ * Determine which sprite orientation should be displayed for a
+ * character facing a particular world direction given the current
+ * camera angle.  The world direction is provided as a string key
+ * corresponding to the keys in directionVectors.  The function
+ * computes the pixel vector for that direction, rotates it by the
+ * camera angle, and then classifies the resulting angle into one of
+ * the eight orientation labels: 'right', 'right-down', 'down',
+ * 'left-down', 'left', 'left-up', 'up' or 'right-up'.  When the
+ * rotated vector is close to vertical (within 30 degrees of
+ * straight up or down) the 'up' or 'down' sprites are chosen.
+ * Otherwise the nearest of the six side directions is selected.
+ *
+ * @param {string} facing The world direction the character is facing
+ * @returns {string} The display orientation name
+ */
+function getDisplayDirection(facing) {
+  const vec = directionVectors[facing];
+  // Convert the axial direction into pixel space (unrotated)
+  const base = axialToPixel(vec.dq, vec.dr);
+  // Rotate by the camera angle to see how it appears on screen
+  const rot = rotatePoint(base.x, base.y, cameraAngle);
+  const rx = rot.x;
+  const ry = rot.y;
+  // If the rotated vector is near vertical (x small relative to y)
+  // then choose up or down.  Use a 30 degree threshold: tan(30°) = 1/√3 ≈ 0.577
+  if (Math.abs(rx) < Math.abs(ry) * 0.577) {
+    // Up if pointing away from camera (negative y), down if toward camera
+    return ry < 0 ? 'up' : 'down';
+  }
+  // Otherwise classify into one of six directions by finding the
+  // closest of the six canonical angles.  Define the canonical angles
+  // for the display directions in radians.  Note: angles increase
+  // counter‑clockwise, and 0 rad corresponds to pointing right.
+  const orientations = [
+    { name: 'right',      angle: 0 },
+    { name: 'right-down', angle: -Math.PI / 3 },
+    { name: 'left-down',  angle: -2 * Math.PI / 3 },
+    { name: 'left',       angle: Math.PI },
+    { name: 'left-up',    angle: 2 * Math.PI / 3 },
+    { name: 'right-up',   angle: Math.PI / 3 }
+  ];
+  // Compute angle of the rotated vector
+  const angle = Math.atan2(ry, rx);
+  // Find the orientation with the smallest angular difference
+  let best = orientations[0];
+  let bestDiff = Math.abs(normaliseAngle(angle - orientations[0].angle));
+  for (let i = 1; i < orientations.length; i++) {
+    const diff = Math.abs(normaliseAngle(angle - orientations[i].angle));
+    if (diff < bestDiff) {
+      best = orientations[i];
+      bestDiff = diff;
+    }
+  }
+  return best.name;
+}
+
+// Normalise an angle in radians to the range [-π, π].  This helper
+// function ensures angular differences wrap around the circle
+function normaliseAngle(a) {
+  while (a <= -Math.PI) a += 2 * Math.PI;
+  while (a > Math.PI) a -= 2 * Math.PI;
+  return a;
+}
 
 /**
  * Produce a unique key for an axial coordinate.  This helper is used
@@ -236,8 +379,7 @@ function createTiles() {
   tiles.forEach(t => {
     const div = document.createElement('div');
     div.className = 'tile';
-    div.style.left = (t.x + offsetX) + 'px';
-    div.style.top  = (t.y + offsetY) + 'px';
+    // Positions will be applied later by updateAllTiles()
     game.appendChild(div);
     t.element = div;
     // When the tile is clicked the character will attempt to move to that
@@ -246,16 +388,16 @@ function createTiles() {
   });
 }
 
-// Character state: axial coordinates and direction.  The character
-// starts centred facing right.  A dedicated DOM element is used to
-// render the sprite; its background image is swapped when direction
-// changes.
-let character = { q: 2, r: 2, dir: 'right' };
+// Character state: axial coordinates and world facing direction.  The
+// facing property records which neighbour direction the character is
+// looking towards in world space.  It begins at 'right'.
+let character = { q: 2, r: 2, facing: 'right' };
 const charDiv = document.createElement('div');
 charDiv.className = 'character';
 charDiv.style.left = '0px';
 charDiv.style.top  = '0px';
-charDiv.style.backgroundImage = `url('${spriteMap[character.dir]}')`;
+// The background image will be set in updateCharacter() based on
+// character.facing and cameraAngle, so no need to initialise here.
 game.appendChild(charDiv);
 
 /**
@@ -267,12 +409,23 @@ game.appendChild(charDiv);
  * applied to centre the 32x35 image over the tile.
  */
 function updateCharacter() {
-  const { x, y } = axialToPixel(character.q, character.r);
-  const p = iso(x, y);
-  charDiv.style.left = (p.x + offsetX) + 'px';
-  charDiv.style.top  = (p.y + offsetY) + 'px';
-  charDiv.style.backgroundImage = `url('${spriteMap[character.dir]}')`;
+  // Compute the rotated pixel coordinates of the character using the
+  // precomputed rotated basis vectors.  This ensures the grid and
+  // character remain aligned after camera rotations.
+  const rotX = rotBasisQ.x * character.q + rotBasisR.x * character.r;
+  const rotY = rotBasisQ.y * character.q + rotBasisR.y * character.r;
+  // Position the DOM element using the current offsets
+  charDiv.style.left = (rotX + currentOffsetX) + 'px';
+  charDiv.style.top  = (rotY + currentOffsetY) + 'px';
+  // Determine which sprite orientation to use based on world facing and camera angle
+  const displayDir = getDisplayDirection(character.facing);
+  charDiv.style.backgroundImage = `url('${spriteMap[displayDir]}')`;
   // Translate by half the sprite's width and height to centre it over the tile
+  // and counter‑rotate so that the sprite remains upright even as the
+  // grid is rotated.
+  // Centre the sprite over the tile.  We do not rotate the sprite
+  // itself here; the sprite orientation is controlled by swapping
+  // images via getDisplayDirection().
   charDiv.style.transform = 'translate(-16px, -18px)';
 }
 
@@ -288,25 +441,24 @@ function updateCharacter() {
 function moveCharacter(dq, dr) {
   const newQ = character.q + dq;
   const newR = character.r + dr;
-  if (newQ >= 0 && newQ < GRID_SIZE && newR >= 0 && newR < GRID_SIZE) {
+    if (newQ >= 0 && newQ < GRID_SIZE && newR >= 0 && newR < GRID_SIZE) {
     character.q = newQ;
     character.r = newR;
-    // Assign direction label based on movement.  The new naming
-    // convention drops the pure "up" and "down" directions in favour of
-    // diagonals.  See directionVectors for the mapping between
-    // coordinate deltas and their labels.
+    // Update the world facing direction based on movement.  The
+    // directionVectors keys correspond exactly to the six axial
+    // neighbours.
     if (dq === -1 && dr === 0) {
-      character.dir = 'left';
+      character.facing = 'left';
     } else if (dq === 0 && dr === -1) {
-      character.dir = 'left-up';
+      character.facing = 'left-up';
     } else if (dq === 1 && dr === -1) {
-      character.dir = 'right-up';
+      character.facing = 'right-up';
     } else if (dq === 1 && dr === 0) {
-      character.dir = 'right';
+      character.facing = 'right';
     } else if (dq === 0 && dr === 1) {
-      character.dir = 'right-down';
+      character.facing = 'right-down';
     } else if (dq === -1 && dr === 1) {
-      character.dir = 'left-down';
+      character.facing = 'left-down';
     }
     updateCharacter();
   }
@@ -314,4 +466,24 @@ function moveCharacter(dq, dr) {
 
 // Initialise the grid and character
 createTiles();
+// Compute initial rotated positions and offsets, then draw the tiles
+updateAllTiles();
+// Draw the character at its starting location
 updateCharacter();
+
+// Listen for camera rotation keys.  Q rotates counter‑clockwise by 30°
+// (turning the camera to the left) and E rotates clockwise by 30°
+// (turning the camera to the right).  After rotating, the tiles and
+// character are redrawn.
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'q' || event.key === 'Q') {
+    cameraAngle = (cameraAngle - 30) % 360;
+    if (cameraAngle < 0) cameraAngle += 360;
+    updateAllTiles();
+    updateCharacter();
+  } else if (event.key === 'e' || event.key === 'E') {
+    cameraAngle = (cameraAngle + 30) % 360;
+    updateAllTiles();
+    updateCharacter();
+  }
+});

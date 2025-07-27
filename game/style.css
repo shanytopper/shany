@@ -1,5 +1,12 @@
-/* Styles for the revised directional indicator.  The arrow is anchored to
-   the character’s tile and uses polar offsets to point outward. */
+/*
+ * Styles for the hex based, isometric tactical RPG prototype.
+ *
+ * The layout consists of an outer container (#game) that is rotated to
+ * achieve a pseudo‑3D look.  Individual hex tiles are absolutely positioned
+ * within this container.  The player sprite is also absolutely positioned
+ * and its background image is swapped out to reflect the current facing
+ * direction.
+ */
 
 body {
   margin: 0;
@@ -31,20 +38,18 @@ body {
   z-index: 1;
 }
 
-.direction-indicator {
-  position: absolute;
-  width: 20px;
-  height: 20px;
-  background: rgba(255, 255, 0, 0.9);
-  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
-  pointer-events: none;
-  z-index: 4;
-}
-
+/*
+ * Character sprite container.  The width and height match the cropped
+ * frames extracted from the original sprite sheet.  The translate
+ * transform centres the sprite on the underlying hex tile.  Additional
+ * transforms such as scale or rotation are not applied here because
+ * directional sprites are provided for each of the six movement
+ * directions.
+ */
 .character {
   position: absolute;
-  width: 30px;
-  height: 38px;
+  width: 32px;
+  height: 35px;
   background-repeat: no-repeat;
   background-size: contain;
   z-index: 3;

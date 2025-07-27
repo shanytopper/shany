@@ -1,17 +1,29 @@
+<!--
+  Modified game prototype index.
+
+  This file sets up a simple container for the hex based isometric game.  It
+  includes a stylesheet and a script that handle grid creation, movement
+  logic and sprite rendering.  The cached version query parameters on the
+  included resources ensure the browser always fetches the latest files.
+-->
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Isometric Hex Game Prototype</title>
-  <!-- Prevent caching by adding no-cache directives and query version to files -->
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
-  <link rel="stylesheet" href="style.css?v=1.0.2" />
-</head>
-<body>
-  <div id="game"></div>
-  <script src="script.js?v=1.0.2"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Isometric Hex Game Prototype</title>
+    <!-- Prevent caching by adding no‑cache directives and a versioned
+         stylesheet reference -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <link rel="stylesheet" href="style.css?v=2.0.0" />
+  </head>
+  <body>
+    <div id="game"></div>
+    <!-- The script contains all of the logic for laying out the grid, handling
+         mouse input and animating the player character.  The version query
+         string forces the browser to pick up changes after a reload. -->
+    <script src="script.js?v=2.0.0"></script>
+  </body>
 </html>

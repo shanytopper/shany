@@ -202,37 +202,53 @@ function getDisplayDirection(facing) {
   const rot = rotatePoint(base.x, base.y, cameraAngle);
   const rx = rot.x;
   const ry = rot.y;
-  // If the rotated vector is near vertical (x small relative to y)
-  // then choose up or down.  Use a 30 degree threshold: tan(30°) = 1/√3 ≈ 0.577
-  if (Math.abs(rx) < Math.abs(ry) * 0.577) {
-    // Up if pointing away from camera (negative y), down if toward camera
-    return ry < 0 ? 'up' : 'down';
-  }
-  // Otherwise classify into one of six directions by finding the
-  // closest of the six canonical angles.  Define the canonical angles
-  // for the display directions in radians.  Note: angles increase
-  // counter‑clockwise, and 0 rad corresponds to pointing right.
-  const orientations = [
-    { name: 'right',      angle: 0 },
-    { name: 'right-down', angle: -Math.PI / 3 },
-    { name: 'left-down',  angle: -2 * Math.PI / 3 },
-    { name: 'left',       angle: Math.PI },
-    { name: 'left-up',    angle: 2 * Math.PI / 3 },
-    { name: 'right-up',   angle: Math.PI / 3 }
-  ];
-  // Compute angle of the rotated vector
+  // Classify the angle of the rotated vector into one of twelve 30°
+  // sectors.  We then map pairs of adjacent sectors to the six
+  // diagonal directions or to up/down for the sectors around ±90°.
   const angle = Math.atan2(ry, rx);
-  // Find the orientation with the smallest angular difference
-  let best = orientations[0];
-  let bestDiff = Math.abs(normaliseAngle(angle - orientations[0].angle));
-  for (let i = 1; i < orientations.length; i++) {
-    const diff = Math.abs(normaliseAngle(angle - orientations[i].angle));
-    if (diff < bestDiff) {
-      best = orientations[i];
-      bestDiff = diff;
-    }
-  }
-  return best.name;
+  // Quantise the angle to the nearest 30°.  This yields an integer
+  // index where 0 corresponds to 0°, 1 to 30°, 2 to 60°, etc.  Values
+  // wrap around at ±180°.
+  let index = Math.round(angle / (Math.PI / 6));
+  // Normalise index to range [-6, 6]
+  if (index > 6) index -= 12;
+  if (index < -6) index += 12;
+      // Map the quantised sector index to one of our eight display
+      // orientations.  Each case (or group of cases) corresponds to
+      // one of the major hex directions plus the vertical up/down.
+      switch (index) {
+        case 0:
+          // Angle ≈ 0° → world pointing east → player facing right
+          return 'right';
+        case 1:
+        case 2:
+          // Angles ≈ 30° or 60° → trending down and to the right
+          return 'right-down';
+        case 3:
+          // Angle ≈ 90° → pointing straight down on screen
+          return 'down';
+        case 4:
+        case 5:
+          // Angles ≈ 120° or 150° → trending down and to the left
+          return 'left-down';
+        case 6:
+        case -6:
+          // Angle ≈ ±180° → world pointing west → player facing left
+          return 'left';
+        case -5:
+        case -4:
+          // Angles ≈ -150° or -120° → trending up and to the left
+          return 'left-up';
+        case -3:
+          // Angle ≈ -90° → pointing straight up on screen
+          return 'up';
+        case -2:
+        case -1:
+          // Angles ≈ -60° or -30° → trending up and to the right
+          return 'right-up';
+        default:
+          return 'right';
+      }
 }
 
 // Normalise an angle in radians to the range [-π, π].  This helper
@@ -420,6 +436,13 @@ function updateCharacter() {
   // Determine which sprite orientation to use based on world facing and camera angle
   const displayDir = getDisplayDirection(character.facing);
   charDiv.style.backgroundImage = `url('${spriteMap[displayDir]}')`;
+      // Store the computed display direction on the element as a title so it
+      // appears as a tooltip when hovered.  This can help with debugging
+      // without cluttering the on‑screen sprite.
+      charDiv.title = displayDir;
+      // Do not place any text inside the character div; the sprite itself
+      // conveys the facing direction.
+      charDiv.textContent = '';
   // Translate by half the sprite's width and height to centre it over the tile
   // and counter‑rotate so that the sprite remains upright even as the
   // grid is rotated.

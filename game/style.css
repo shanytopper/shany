@@ -1,6 +1,5 @@
-/* Revised styles for the isometric hex prototype.  These changes add
-   a clear indication of the character's facing direction by
-   highlighting the neighbouring tile and repositioning the arrow. */
+/* Styles for the revised directional indicator.  The arrow is anchored to
+   the character’s tile and uses polar offsets to point outward. */
 
 body {
   margin: 0;
@@ -21,7 +20,6 @@ body {
   overflow: visible;
 }
 
-/* Base hex tile.  Use the same dimensions and clip‑path as the original. */
 .tile {
   position: absolute;
   width: 100px;
@@ -33,18 +31,6 @@ body {
   z-index: 1;
 }
 
-/* Highlight applied to the tile directly in front of the character.
-   A subtle yellow tint and outline call attention to the target tile
-   without overpowering the board. */
-.tile.facing {
-  box-shadow: 0 0 0 3px rgba(255, 223, 0, 0.8);
-  background: rgba(255, 255, 0, 0.2);
-  z-index: 2;
-}
-
-/* Direction indicator arrow.  This triangle remains small but is now
-   repositioned onto the facing tile.  The rotation is handled by
-   JavaScript; the element remains upright by default. */
 .direction-indicator {
   position: absolute;
   width: 20px;
@@ -52,10 +38,9 @@ body {
   background: rgba(255, 255, 0, 0.9);
   clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
   pointer-events: none;
-  z-index: 5;
+  z-index: 4;
 }
 
-/* Character sprite definition.  No change needed here aside from z‑index. */
 .character {
   position: absolute;
   width: 30px;

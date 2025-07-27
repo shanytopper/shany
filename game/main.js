@@ -137,10 +137,13 @@
         const mat = new THREE.MeshStandardMaterial({ color: colour, flatShading: true });
         const mesh = new THREE.Mesh(geom, mat);
         // Compute world position for this axial coordinate.  Only x and
-        // z are used; y remains at 0 so the top of the tile sits on
-        // y=0 once group translation is applied.
+        // z are used; the y coordinate is offset so that the top of
+        // each tile sits at y=0.  CylinderGeometry is centred on
+        // y=0 by default and extends equally above and below, so
+        // translating by −TILE_HEIGHT/2 pushes the bottom below the
+        // ground plane and aligns the top with y=0.
         const worldPos = axialToWorld(q, r);
-        mesh.position.set(worldPos.x, 0, worldPos.z);
+        mesh.position.set(worldPos.x, -TILE_HEIGHT / 2, worldPos.z);
         // Record axial coordinates on the mesh for later pathfinding.
         mesh.userData = { q, r };
         // Add to group and arrays.
@@ -181,7 +184,10 @@
     // has been translated to centre the grid, these local coordinates
     // remain valid.
     const pos = axialToWorld(charPosition.q, charPosition.r);
-    character.position.set(pos.x, 0, pos.z);
+    // Position the avatar so its base sits on top of the hex tile.
+    // A small positive y offset prevents z‑fighting between the arrow
+    // and the tile surface.
+    character.position.set(pos.x, 0.01, pos.z);
     gridGroup.add(character);
   }
 
@@ -404,7 +410,8 @@
         // remain valid and are transformed into world space automatically.
         character.position.x = initial.x + delta.x * t;
         character.position.z = initial.z + delta.z * t;
-        character.position.y = 0; // keep the arrow on the tile surface
+        // Keep the arrow slightly above the tile to avoid z‑fighting.
+        character.position.y = 0.01;
         if (t < 1) {
           requestAnimationFrame(step);
         } else {

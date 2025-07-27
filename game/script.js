@@ -51,11 +51,16 @@ function createTiles() {
 }
 
 // Character state and element
-let character = { q: 2, r: 2 };
+// Track the axial coordinates and the current facing direction of the character.
+// The character starts at the centre of the grid facing right by default.
+let character = { q: 2, r: 2, facing: 'right' };
 const charDiv = document.createElement('div');
 charDiv.className = 'character';
 charDiv.style.left = '0px';
 charDiv.style.top = '0px';
+
+// Set the initial sprite on the character element based on its facing.
+charDiv.style.backgroundImage = "url('player_" + character.facing + ".png')";
 
 game.appendChild(charDiv);
 
@@ -64,6 +69,9 @@ function updateCharacter() {
   const p = iso(x, y);
   charDiv.style.left = (p.x + offsetX) + 'px';
   charDiv.style.top = (p.y + offsetY) + 'px';
+
+  // Update the sprite orientation whenever the character moves.
+  charDiv.style.backgroundImage = "url('player_" + character.facing + ".png')";
 }
 
 function moveCharacter(dq, dr) {
@@ -72,6 +80,13 @@ function moveCharacter(dq, dr) {
   if (newQ >= 0 && newQ < GRID_SIZE && newR >= 0 && newR < GRID_SIZE) {
     character.q = newQ;
     character.r = newR;
+    // Update facing direction based on horizontal movement.  For diagonal moves
+    // we consider the q component: negative q means facing left, positive q means right.
+    if (dq < 0) {
+      character.facing = 'left';
+    } else if (dq > 0) {
+      character.facing = 'right';
+    }
     updateCharacter();
   }
 }

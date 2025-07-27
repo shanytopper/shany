@@ -42,7 +42,8 @@ body {
      comfortably on a hex tile. */
   width: 30px;
   height: 38px;
-  background-image: url('player_sprite.png');
+  /* The actual sprite is set dynamically in script.js based on the facing
+     direction.  Ensure the image fits inside the element. */
   background-repeat: no-repeat;
   background-size: contain;
   /* Centre the sprite on its position by offsetting half its width and height */

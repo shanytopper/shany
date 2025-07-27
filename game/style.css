@@ -35,18 +35,15 @@ body {
 /* Character sprite. We use a PNG sprite of a soldier downloaded from
    OpenGameArt.org (CC0 licence). Adjust the width/height to match the
    sprite resolution. Remove the border-radius to avoid a circular dot. */
+/* Character sprite.  The width/height define how large the sprite appears on the
+   hex tile.  The actual image and horizontal flip are applied via JS.  We
+   intentionally avoid setting the transform here so that the script can
+   combine translation and scaleX dynamically based on the facing direction. */
 .character {
   position: absolute;
-  /* Use the cropped and transparent player sprite (26x33 px).  The size
-     values are chosen to preserve the sprite's aspect ratio while fitting it
-     comfortably on a hex tile. */
   width: 30px;
   height: 38px;
-  /* The actual sprite is set dynamically in script.js based on the facing
-     direction.  Ensure the image fits inside the element. */
   background-repeat: no-repeat;
   background-size: contain;
-  /* Centre the sprite on its position by offsetting half its width and height */
-  transform: translate(-15px, -19px);
   z-index: 10;
 }

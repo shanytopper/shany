@@ -41,7 +41,7 @@
   let scene, camera, renderer;
   let gridGroup;             // holds all tiles and the avatar
   const hexMeshes = [];      // flat array of tile meshes used for raycasting
-  let character;             // the avatar represented by a THREE.ArrowHelper
+  let character;             // the avatar represented by a THREE.Group (cylinder and sphere)
   let charPosition = { q: 2, r: 2 }; // current axial coordinates of the avatar
   let isAnimating = false;   // flag to prevent concurrent animations
   let cameraAngle = 0;       // current rotation angle of the grid about the Y axis
@@ -175,31 +175,89 @@
   }
 
   /**
-   * Create the player avatar.  A THREE.ArrowHelper is used to
-   * represent direction.  Its shaft and head dimensions are scaled
-   * relative to the hex radius.  The arrow is initially oriented
-   * pointing east (positive x direction) which corresponds to the
-   * 'right' facing used in the original prototype.
+   * Create the player avatar.  In the original prototype the player was a
+   * small soldier sprite rendered via CSS.  Because no image assets are
+   * available in this project, we approximate that character using a
+   * low‑poly 3D model assembled from basic primitives.  The avatar
+   * consists of a cylindrical torso, two legs, two arms, a head and a
+   * helmet.  All sub‑meshes are grouped together so that rotations and
+   * translations apply uniformly.  Colours are chosen to evoke a simple
+   * uniform: dark clothing, a grey helmet and a lighter skin tone.
    */
   function createCharacter() {
-    // Choose a direction for the arrow to point initially (east).  The
-    // vector is normalised by ArrowHelper internally.
-    const dir = new THREE.Vector3(1, 0, 0);
-    const length = HEX_RADIUS * 0.8;
-    const headLength = HEX_RADIUS * 0.4;
-    const headWidth = HEX_RADIUS * 0.3;
-    const color = 0xffaa00;
-    character = new THREE.ArrowHelper(dir, new THREE.Vector3(), length, color, headLength, headWidth);
-    // Place the avatar at its starting axial coordinate.  We compute
-    // local position using axial coordinates and add the grid offset by
-    // leveraging the existing mesh positions.  Because the grid group
-    // has been translated to centre the grid, these local coordinates
-    // remain valid.
-    const pos = axialToWorld(charPosition.q, charPosition.r);
-    // Position the avatar so its base sits on top of the hex tile.  The
-    // tiles extend from y=0 up to y=TILE_HEIGHT; place the arrow just
-    // above this height to avoid z‑fighting.
-    character.position.set(pos.x, TILE_HEIGHT + 0.02, pos.z);
+    const group = new THREE.Group();
+    // Dimensions relative to the hex radius.  Adjust these constants to
+    // change the proportions of the avatar.
+    const bodyRadius = HEX_RADIUS * 0.3;
+    const bodyHeight = HEX_RADIUS * 0.8;
+    const legRadius  = bodyRadius * 0.35;
+    const legHeight  = bodyHeight * 0.5;
+    const armRadius  = bodyRadius * 0.25;
+    const armLength  = bodyHeight * 0.75;
+    const headRadius = HEX_RADIUS * 0.25;
+    const helmetRadius = headRadius * 1.1;
+
+    // Torso
+    const torsoGeom = new THREE.CylinderGeometry(bodyRadius, bodyRadius, bodyHeight, 16);
+    // Anchor the torso so its base sits at y=0.
+    torsoGeom.translate(0, bodyHeight / 2, 0);
+    const torsoMat  = new THREE.MeshStandardMaterial({ color: 0x3e5c88 });
+    const torsoMesh = new THREE.Mesh(torsoGeom, torsoMat);
+    group.add(torsoMesh);
+
+    // Legs: two short cylinders extending downward from the torso.
+    const legGeom = new THREE.CylinderGeometry(legRadius, legRadius, legHeight, 12);
+    // Position relative to the torso; base at y=0.
+    legGeom.translate(0, legHeight / 2, 0);
+    const legMat  = new THREE.MeshStandardMaterial({ color: 0x2e4372 });
+    const leftLeg  = new THREE.Mesh(legGeom.clone(), legMat);
+    const rightLeg = new THREE.Mesh(legGeom.clone(), legMat);
+    const legOffsetX = bodyRadius * 0.4;
+    leftLeg.position.set(-legOffsetX, 0, 0);
+    rightLeg.position.set( legOffsetX, 0, 0);
+    group.add(leftLeg);
+    group.add(rightLeg);
+
+    // Arms: slender cylinders oriented horizontally (along the X axis)
+    // and attached at mid‑torso height.
+    const armGeom = new THREE.CylinderGeometry(armRadius, armRadius, armLength, 12);
+    // Rotate so that the cylinder's length extends along the X axis.
+    armGeom.rotateZ(Math.PI / 2);
+    // Translate so that its centre is at origin; rotation above affects pivot.
+    armGeom.translate(0, 0, 0);
+    const armMat  = new THREE.MeshStandardMaterial({ color: 0x2e4372 });
+    const leftArm  = new THREE.Mesh(armGeom.clone(), armMat);
+    const rightArm = new THREE.Mesh(armGeom.clone(), armMat);
+    const armHeight = bodyHeight * 0.5;
+    const armOffsetX = bodyRadius + armLength / 2;
+    leftArm.position.set(-armOffsetX, armHeight, 0);
+    rightArm.position.set( armOffsetX, armHeight, 0);
+    group.add(leftArm);
+    group.add(rightArm);
+
+    // Head: sphere on top of the torso.
+    const headGeom = new THREE.SphereGeometry(headRadius, 16, 12);
+    headGeom.translate(0, bodyHeight + headRadius, 0);
+    const headMat  = new THREE.MeshStandardMaterial({ color: 0xffd7b1 });
+    const headMesh = new THREE.Mesh(headGeom, headMat);
+    group.add(headMesh);
+
+    // Helmet: a hemisphere (half‑sphere) slightly larger than the head.
+    // We create a full sphere and use the phiLength to cut it in half.
+    const helmetGeom = new THREE.SphereGeometry(helmetRadius, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+    helmetGeom.translate(0, bodyHeight + headRadius * 2, 0);
+    const helmetMat  = new THREE.MeshStandardMaterial({ color: 0x555555 });
+    const helmetMesh = new THREE.Mesh(helmetGeom, helmetMat);
+    group.add(helmetMesh);
+
+    // Scale the avatar slightly to ensure it fits comfortably within a single tile.
+    group.scale.set(1, 1, 1);
+    // Position the avatar on the starting tile.  Place its feet at y=TILE_HEIGHT
+    // so that the entire model stands on top of the tile.  A small
+    // offset (0.02) avoids z‑fighting.
+    const start = axialToWorld(charPosition.q, charPosition.r);
+    group.position.set(start.x, TILE_HEIGHT + 0.02, start.z);
+    character = group;
     gridGroup.add(character);
   }
 
@@ -385,7 +443,12 @@
         dir.y = 0;
         if (dir.lengthSq() > 0) {
           dir.normalize();
-          character.setDirection(dir);
+          // Rotate the character to face the movement direction.  We
+          // interpret the avatar’s default forward orientation as the
+          // positive Z axis.  The rotation angle about the Y axis is
+          // derived from the x and z components of the direction vector.
+          const angle = Math.atan2(dir.x, dir.z);
+          character.rotation.y = angle;
         }
         // Perform the linear interpolation over MOVE_DURATION
         await moveBetween(startLocal, endLocal, MOVE_DURATION);

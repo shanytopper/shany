@@ -59,7 +59,7 @@ const spriteMap = {
   // Facing south‑east: show the player's front‑right
   'right-down': 'player_right_down.png',
   // Facing south‑west: show the player's front‑left
-  'left-down':  'player_leftt_down.png'
+  'left-down':  'player_left_down.png'
 };
 
 /**

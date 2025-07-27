@@ -1,4 +1,7 @@
-/* Base styles for the isometric hex grid prototype */
+/* Revised styles for the isometric hex prototype.  These changes add
+   a clear indication of the character's facing direction by
+   highlighting the neighbouring tile and repositioning the arrow. */
+
 body {
   margin: 0;
   background: #222;
@@ -12,34 +15,36 @@ body {
   width: 800px;
   height: 600px;
   background: #555;
-  /* rotate the container for an isometric effect */
   transform: perspective(800px) rotateX(45deg);
   transform-style: preserve-3d;
   position: relative;
   overflow: visible;
 }
 
-/* Hexagonal tile. The width and height correspond to twice the hex radius and
-   sqrt(3)/2 * width respectively (for a pointy-top hex). */
+/* Base hex tile.  Use the same dimensions and clip‑path as the original. */
 .tile {
   position: absolute;
   width: 100px;
-  height: 86.6px; /* SIZE * sqrt(3) / 2 for pointy hex */
+  height: 86.6px;
   background: white;
   clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
   border: 1px solid #000;
-  /* centre the tile on its coordinate */
   transform: translate(-50%, -50%);
+  z-index: 1;
 }
 
-/* Highlighted tile indicates the direction the character is facing.  Use a
-   semi-transparent color overlay on the tile to signal which neighboring
-   hex the character is looking toward. */
+/* Highlight applied to the tile directly in front of the character.
+   A subtle yellow tint and outline call attention to the target tile
+   without overpowering the board. */
+.tile.facing {
+  box-shadow: 0 0 0 3px rgba(255, 223, 0, 0.8);
+  background: rgba(255, 255, 0, 0.2);
+  z-index: 2;
+}
 
-/* Direction indicator arrow overlay.  This triangular element is appended
-   separately from the character sprite and is rotated to indicate which
-   direction the character is currently facing.  It uses a CSS clip-path to
-   form a triangle pointing upward at 0°; rotations are applied via JS. */
+/* Direction indicator arrow.  This triangle remains small but is now
+   repositioned onto the facing tile.  The rotation is handled by
+   JavaScript; the element remains upright by default. */
 .direction-indicator {
   position: absolute;
   width: 20px;
@@ -47,21 +52,15 @@ body {
   background: rgba(255, 255, 0, 0.9);
   clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
   pointer-events: none;
-  z-index: 15;
+  z-index: 5;
 }
 
-/* Character sprite. We use a PNG sprite of a soldier downloaded from
-   OpenGameArt.org (CC0 licence). Adjust the width/height to match the
-   sprite resolution. Remove the border-radius to avoid a circular dot. */
-/* Character sprite.  The width/height define how large the sprite appears on the
-   hex tile.  The actual image and horizontal flip are applied via JS.  We
-   intentionally avoid setting the transform here so that the script can
-   combine translation and scaleX dynamically based on the facing direction. */
+/* Character sprite definition.  No change needed here aside from z‑index. */
 .character {
   position: absolute;
   width: 30px;
   height: 38px;
   background-repeat: no-repeat;
   background-size: contain;
-  z-index: 10;
+  z-index: 3;
 }

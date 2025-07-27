@@ -49,17 +49,17 @@ const directionVectors = {
 // orientation reported by the user.
 const spriteMap = {
   // Facing west: show the player's right side
-  left:         'player_right.png',
+  right:         'player_right.png',
   // Facing north‑west: show the player's back‑right
   'left-up':    'player_right_up.png',
   // Facing north‑east: show the player's back‑left
   'right-up':   'player_left_up.png',
   // Facing east: show the player's left side
-  right:        'player_left.png',
+  left:        'player_left.png',
   // Facing south‑east: show the player's front‑left
-  'right-down': 'player_left_down.png',
+  'left-down': 'player_left_down.png',
   // Facing south‑west: show the player's front‑right
-  'left-down':  'player_right_down.png'
+  'right-down':  'player_right_down.png'
   ,
   // Pure up and down orientations used when the camera rotates the
   // world directions to align vertically.

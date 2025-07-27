@@ -9,6 +9,23 @@ const game = document.getElementById('game');
 let tiles = [];
 let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
+// Mapping from direction labels to axial coordinate offsets.  These
+// correspond to the six neighbors in a pointy-top hex grid.  We use these
+// vectors to determine which tile to highlight based on the character's
+// viewing direction.
+const directionVectors = {
+  up: { dq: 0, dr: -1 },       // north-west in our axial coordinate system
+  'up-right': { dq: 1, dr: -1 }, // north-east
+  right: { dq: 1, dr: 0 },     // east
+  down: { dq: 0, dr: 1 },      // south-east
+  'down-left': { dq: -1, dr: 1 }, // south-west
+  left: { dq: -1, dr: 0 }      // west
+};
+
+// Track the currently highlighted tile so that we can clear the highlight
+// before applying a new one.
+let currentHighlight = null;
+
 function axialToPixel(q, r) {
   const x = SIZE * Math.sqrt(3) * (q + r / 2);
   const y = SIZE * 1.5 * r;
@@ -51,11 +68,11 @@ function createTiles() {
 }
 
 // Character state and element
-// Track the axial coordinates and the current facing direction of the character.
-// The character starts at the centre of the grid facing right by default.  We
-// only store 'left' or 'right' as the facing since we use a single sprite
-// that gets flipped horizontally via CSS transforms.
-let character = { q: 2, r: 2, facing: 'right' };
+// Track the axial coordinates, the current facing direction (for sprite
+// mirroring), and the direction of the last movement (one of the six
+// axial directions).  The character starts at the centre of the grid
+// facing right and looking to the right by default.
+let character = { q: 2, r: 2, facing: 'right', dir: 'right' };
 const charDiv = document.createElement('div');
 charDiv.className = 'character';
 
@@ -83,6 +100,28 @@ function updateCharacter() {
   // sprite without altering its origin; translation centres the sprite.
   const scaleX = character.facing === 'left' ? -1 : 1;
   charDiv.style.transform = `translate(-15px, -19px) scaleX(${scaleX})`;
+
+  // Update the highlighted tile based on the character's viewing direction.
+  // Clear any previous highlight.
+  if (currentHighlight) {
+    currentHighlight.classList.remove('highlight');
+    currentHighlight = null;
+  }
+  // Lookup the axial offset for the current direction.
+  const vec = directionVectors[character.dir];
+  if (vec) {
+    const hq = character.q + vec.dq;
+    const hr = character.r + vec.dr;
+    // Only highlight if the target tile is within the grid bounds.
+    if (hq >= 0 && hq < GRID_SIZE && hr >= 0 && hr < GRID_SIZE) {
+      // Find the tile with matching q and r.
+      const tile = tiles.find(t => t.q === hq && t.r === hr);
+      if (tile && tile.element) {
+        tile.element.classList.add('highlight');
+        currentHighlight = tile.element;
+      }
+    }
+  }
 }
 
 function moveCharacter(dq, dr) {
@@ -97,6 +136,22 @@ function moveCharacter(dq, dr) {
       character.facing = 'left';
     } else if (dq > 0) {
       character.facing = 'right';
+    }
+    // Set the viewing direction label based on the movement vector.  This
+    // determines which adjacent tile will be highlighted.  Each case corresponds
+    // to one of the six directions on a pointy-top hex grid.
+    if (dq === 0 && dr === -1) {
+      character.dir = 'up';
+    } else if (dq === 1 && dr === -1) {
+      character.dir = 'up-right';
+    } else if (dq === 1 && dr === 0) {
+      character.dir = 'right';
+    } else if (dq === 0 && dr === 1) {
+      character.dir = 'down';
+    } else if (dq === -1 && dr === 1) {
+      character.dir = 'down-left';
+    } else if (dq === -1 && dr === 0) {
+      character.dir = 'left';
     }
     updateCharacter();
   }

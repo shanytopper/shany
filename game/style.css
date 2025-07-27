@@ -32,6 +32,13 @@ body {
   transform: translate(-50%, -50%);
 }
 
+/* Highlighted tile indicates the direction the character is facing.  Use a
+   semi-transparent color overlay on the tile to signal which neighboring
+   hex the character is looking toward. */
+.tile.highlight {
+  background-color: rgba(255, 255, 0, 0.5);
+}
+
 /* Character sprite. We use a PNG sprite of a soldier downloaded from
    OpenGameArt.org (CC0 licence). Adjust the width/height to match the
    sprite resolution. Remove the border-radius to avoid a circular dot. */

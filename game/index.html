@@ -1,29 +1,44 @@
 <!--
-  Modified game prototype index.
+  WebGL re‑implementation of the isometric hex grid prototype.
 
-  This file sets up a simple container for the hex based isometric game.  It
-  includes a stylesheet and a script that handle grid creation, movement
-  logic and sprite rendering.  The cached version query parameters on the
-  included resources ensure the browser always fetches the latest files.
+  This HTML file sets up a full screen canvas and loads Three.js
+  from a CDN.  The companion script (main.js) builds the hex grid,
+  handles mouse picking, implements breadth‑first search pathfinding
+  and animates a simple player avatar along the chosen route.  The
+  camera can be rotated in 30° increments using the Q and E keys,
+  mirroring the behaviour of the original DOM based prototype.
 -->
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Isometric Hex Game Prototype</title>
-    <!-- Prevent caching by adding no‑cache directives and a versioned
-         stylesheet reference -->
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-    <meta http-equiv="Pragma" content="no-cache" />
-    <meta http-equiv="Expires" content="0" />
-    <link rel="stylesheet" href="style.css?v=2.0.0" />
+    <title>Isometric Hex Game – WebGL</title>
+    <style>
+      /* Reset default margins and prevent scroll bars */
+      html, body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #222;
+      }
+      #game {
+        width: 100vw;
+        height: 100vh;
+        position: relative;
+      }
+    </style>
+    <!-- Pull Three.js from a CDN.  Keeping this external avoids bundling
+         minified source into our repository.  Should the CDN be
+         unreachable the page will fail gracefully without
+         impacting other components of the project. -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
   </head>
   <body>
+    <!-- Three.js attaches its canvas to this container at runtime. -->
     <div id="game"></div>
-    <!-- The script contains all of the logic for laying out the grid, handling
-         mouse input and animating the player character.  The version query
-         string forces the browser to pick up changes after a reload. -->
-    <script src="script.js?v=2.0.0"></script>
+    <!-- Our application logic.  This file is kept separate for
+         readability and to avoid inline scripts. -->
+    <script src="main.js"></script>
   </body>
 </html>

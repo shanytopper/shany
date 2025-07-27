@@ -48,18 +48,18 @@ const directionVectors = {
 // visible to the camera.  This swap corrects the earlier off‑by‑one
 // orientation reported by the user.
 const spriteMap = {
-  // Facing west: show the player's right side
-  left:         'player_right.png',
+  // Facing west: show the player's left side
+  left:         'player_left.png',
   // Facing north‑west: show the player's back‑right
   'left-up':    'player_right_up.png',
   // Facing north‑east: show the player's back‑left
   'right-up':   'player_left_up.png',
-  // Facing east: show the player's left side
-  right:        'player_left.png',
-  // Facing south‑east: show the player's front‑left
-  'right-down': 'player_left_down.png',
-  // Facing south‑west: show the player's front‑right
-  'left-down':  'player_right_down.png'
+  // Facing east: show the player's right side
+  right:        'player_right.png',
+  // Facing south‑east: show the player's front‑right
+  'right-down': 'player_right_down.png',
+  // Facing south‑west: show the player's front‑left
+  'left-down':  'player_leftt_down.png'
 };
 
 /**

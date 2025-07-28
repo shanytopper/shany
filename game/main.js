@@ -154,12 +154,12 @@ function getDisplayDirection(facing) {
       return 'left';
     case -5:
     case -4:
-      return 'left-up';
+      return 'right-up';
     case -3:
       return 'up';
     case -2:
     case -1:
-      return 'right-up';
+      return 'left-up';
     default:
       return 'right';
   }

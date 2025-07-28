@@ -15,7 +15,7 @@
 const GRID_SIZE = 5;
 const HEX_RADIUS = 50;
 const MOVE_DURATION = 200; // milliseconds per tile during movement
-const ROTATION_STEP = 30;  // degrees of rotation per key press
+const ROTATION_STEP = 60;  // degrees of rotation per key press
 
 // Direction vectors for a pointy‑top axial hex grid.  These values
 // mirror those used in the original prototype.  Each entry records

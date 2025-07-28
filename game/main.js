@@ -1,15 +1,16 @@
 /*
- * Phaser 3 implementation of the isometric hex grid RPG prototype.
+ * Modified Phaser 3 implementation of the isometric hex grid RPG prototype.
  *
- * This script recreates all of the behaviour found in the original
- * DOM/CSS/Three.js versions while leveraging Phaser 3 for rendering
- * and animation.  A 5×5 pointy‑top hex grid is constructed using
- * polygons, a player sprite is positioned on the tiles and breadth‑first
- * search is used to compute shortest paths.  The entire grid rotates
- * around its centre in 30° increments when the Q or E keys are
- * pressed and the character remains upright by counter‑rotating its
- * sprite.  Directional sprites are loaded directly from the GitHub
- * repository to preserve the original graphics.
+ * This version introduces a simple isometric projection to help the map
+ * feel less like a flat top‑down grid.  Each hexagon’s vertices and
+ * position are projected into isometric space before being drawn.  When
+ * converting screen coordinates back into axial coordinates (for
+ * pointer interaction) the inverse projection is applied so that
+ * pathfinding and movement logic remain unchanged.  You can still rotate
+ * the board with the Q/E keys; however, because the tiles are now
+ * pre‑projected, rotations will visually shear the board.  If you prefer
+ * a fixed camera angle, initialise `cameraAngle` to 0 and remove the
+ * rotation handlers.
  */
 
 const GRID_SIZE = 5;
@@ -29,10 +30,7 @@ const directionVectors = {
   'left-down':  { dq: -1, dr:  1 }  // south‑west
 };
 
-// Mapping from display orientation names to Phaser texture keys.  The
-// keys correspond to images hosted in the original repository.  Note
-// that 'up' and 'down' orientations are included for near‑vertical
-// camera perspectives.
+// Mapping from display orientation names to Phaser texture keys.
 const spriteMap = {
   right:        'player_right',
   'right-down': 'player_right_down',
@@ -47,10 +45,10 @@ const spriteMap = {
 // Global camera angle (in degrees).  This value is updated when the
 // player presses Q or E and determines how the grid and character are
 // rotated on screen.  The angle is always normalised to the range
-// [0,360).  Set the initial camera angle to 30° to match the
-// isometric perspective of the original prototype.  Without this
-// initial rotation the grid appears top‑down.
-let cameraAngle = 30;
+// [0,360).  Set the initial camera angle to 0° so that the isometric
+// projection is displayed straight on.  You can change this to 30° or
+// another value to tilt the board further.
+let cameraAngle = 0;
 
 // References to the primary game objects.  These are assigned once
 // during scene creation and then mutated as the game runs.
@@ -62,17 +60,16 @@ let charSprite;
 // keys into directionVectors.
 const character = { q: 2, r: 2, facing: 'right' };
 
-// Tile position cache.  Each entry contains unrotated axial pixel
-// coordinates along with the tile’s axial indices.  The values of x
-// and y are computed via axialToPixel().  During scene creation the
+// Tile position cache.  Each entry contains both the unrotated axial
+// pixel coordinates (top‑down) and the isometrically projected
+// coordinates used for rendering.  During scene creation the
 // coordinates are adjusted by offsetX/offsetY and then assigned to
 // polygon objects as their positions relative to the grid container.
 let tilePositions = [];
 
 // Convert axial (q,r) coordinates into pixel space for a pointy‑top
 // hex grid.  The HEX_RADIUS constant controls the size of each tile
-// and matches the original prototype’s size.  The formulas here are
-// identical to those used in script.js.
+// and matches the original prototype’s size.
 function axialToPixel(q, r) {
   const x = HEX_RADIUS * Math.sqrt(3) * (q + r / 2);
   const y = HEX_RADIUS * 1.5 * r;
@@ -112,6 +109,42 @@ function axialRound(q, r) {
     rz = -rx - ry;
   }
   return { q: rx, r: rz };
+}
+
+// Isometric projection.  Given a top‑down pixel coordinate (x,y),
+// return its isometric equivalent.  This projection rotates the
+// coordinate by 45° and scales the vertical axis by 0.5.  You can
+// adjust the 0.5 factor to achieve different viewing angles (e.g.
+// Math.cos(Phaser.Math.DegToRad(45)) for a shallower projection).
+function isoTransform(x, y) {
+  const isoX = x - y;
+  const isoY = (x + y) * 0.5;
+  return { x: isoX, y: isoY };
+}
+
+// Inverse isometric projection.  Given an isometric coordinate
+// (isoX, isoY), recover the original top‑down pixel coordinate.  This
+// is used when converting pointer clicks back into axial coordinates.
+function inverseIsoTransform(isoX, isoY) {
+  // Solve the system: isoX = x - y, isoY = (x + y)/2
+  const x = (isoX + 2 * isoY) / 2;
+  const y = (2 * isoY - isoX) / 2;
+  return { x, y };
+}
+
+// Generate a set of points representing a unit‑radius hexagon
+// projected into isometric space.  Starting the first vertex at −30°
+// ensures the hex is pointy‑top and aligns with the original code.
+function createIsoHexPoints() {
+  const points = [];
+  for (let i = 0; i < 6; i++) {
+    const angle = Phaser.Math.DegToRad(60 * i - 30);
+    const vx = HEX_RADIUS * Math.cos(angle);
+    const vy = HEX_RADIUS * Math.sin(angle);
+    const iso = isoTransform(vx, vy);
+    points.push(iso.x, iso.y);
+  }
+  return points;
 }
 
 // Rotate an (x,y) vector by the given angle in degrees.  Positive
@@ -224,19 +257,6 @@ function findPath(start, goal) {
   return path;
 }
 
-// Build a set of points representing a unit‑radius hexagon centred on
-// the origin.  The points are scaled by HEX_RADIUS when creating
-// polygons.  Starting the first vertex at −30° ensures the hex is
-// pointy‑top and aligns with the CSS polygon used in the original.
-function createHexPoints() {
-  const points = [];
-  for (let i = 0; i < 6; i++) {
-    const angle = Phaser.Math.DegToRad(60 * i - 30);
-    points.push(HEX_RADIUS * Math.cos(angle), HEX_RADIUS * Math.sin(angle));
-  }
-  return points;
-}
-
 // Phaser game configuration.  The canvas dimensions match the
 // prototype and the scene hooks (preload and create) are defined
 // inline below.
@@ -271,17 +291,20 @@ function preload() {
 // registers input handlers and rotates the camera on demand.  All
 // variables captured from outer scope are used to maintain state.
 function create() {
-  // Compute unrotated tile positions and bounding box
+  // Compute unrotated tile positions and bounding box in isometric space
   tilePositions = [];
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (let q = 0; q < GRID_SIZE; q++) {
     for (let r = 0; r < GRID_SIZE; r++) {
+      // Compute the top‑down pixel coordinate of this tile
       const pos = axialToPixel(q, r);
-      tilePositions.push({ q, r, x: pos.x, y: pos.y });
-      if (pos.x < minX) minX = pos.x;
-      if (pos.y < minY) minY = pos.y;
-      if (pos.x > maxX) maxX = pos.x;
-      if (pos.y > maxY) maxY = pos.y;
+      // Project it into isometric space for rendering
+      const iso = isoTransform(pos.x, pos.y);
+      tilePositions.push({ q, r, x: iso.x, y: iso.y, realX: pos.x, realY: pos.y });
+      if (iso.x < minX) minX = iso.x;
+      if (iso.y < minY) minY = iso.y;
+      if (iso.x > maxX) maxX = iso.x;
+      if (iso.y > maxY) maxY = iso.y;
     }
   }
   const offsetX = -minX - (maxX - minX) / 2;
@@ -293,26 +316,14 @@ function create() {
   // character sprite are added as children so that rotating the
   // container rotates the entire scene around its centre.
   gridContainer = this.add.container(this.scale.width / 2, this.scale.height / 2);
-  const hexPoints = createHexPoints();
-  // Do not scale the grid container.  Keeping a uniform scale ensures
-  // each hex remains a perfect regular hexagon.  Previously we
-  // attempted to compress the vertical axis to simulate an isometric
-  // perspective, but that distorted the hex shape so that it
-  // no longer looked the same when rotated by 60°.  By leaving the
-  // scale at (1, 1) the hexes rotate uniformly and remain identical.
+  const hexPoints = createIsoHexPoints();
   // Add tiles to the container
   tilePositions.forEach(tile => {
     const poly = this.add.polygon(tile.x + offsetX, tile.y + offsetY, hexPoints, 0xffffff);
     poly.setStrokeStyle(1, 0x000000);
-    // Make the tile respond to pointer input.  Using the default
-    // rectangle hit area rather than a rotated polygon simplifies
-    // interaction, especially once the container is scaled and rotated.
     poly.setInteractive({ useHandCursor: true });
-    // Store axial indices on the polygon for easy lookup
     poly.q = tile.q;
     poly.r = tile.r;
-    // We no longer attach a per‑tile pointer handler because
-    // clicks are processed globally in a single pointerdown callback.
     gridContainer.add(poly);
     tile.gameObject = poly;
   });
@@ -335,8 +346,9 @@ function create() {
     cameraAngle = (cameraAngle + ROTATION_STEP) % 360;
     updateRotation.call(this);
   });
-  // Apply the initial rotation (cameraAngle defaults to 30°) to
-  // position the grid in its isometric perspective.
+  // Apply the initial rotation to position the grid.  With
+  // isometric projection cameraAngle can remain 0; modify it here if
+  // you wish to tilt the view at start.
   updateRotation.call(this);
 
   // Global pointer handler.  When the player clicks anywhere in the
@@ -355,17 +367,18 @@ function create() {
     const sin = Math.sin(rad);
     const xUnrot = localX * cos + localY * sin;
     const yUnrot = -localX * sin + localY * cos;
-    // Remove any scaling.  The grid container is no longer scaled,
-    // so scaleX and scaleY are both 1.  We retain these variables
-    // for clarity should scaling be reintroduced in the future.
+    // Remove any scaling.  The grid container is not scaled.
     const scaleX = gridContainer.scaleX;
     const scaleY = gridContainer.scaleY;
     const xScaled = xUnrot / scaleX;
     const yScaled = yUnrot / scaleY;
     // Remove the offset applied when placing tiles
-    const px = xScaled - this.offsetX;
-    const py = yScaled - this.offsetY;
-    const axial = pixelToAxial(px, py);
+    const isoX = xScaled - this.offsetX;
+    const isoY = yScaled - this.offsetY;
+    // Convert from isometric coordinates back into top‑down pixel
+    // coordinates before mapping to axial indices
+    const topDown = inverseIsoTransform(isoX, isoY);
+    const axial = pixelToAxial(topDown.x, topDown.y);
     const q = axial.q;
     const r = axial.r;
     // Check bounds and trigger movement
@@ -409,12 +422,6 @@ function handleTileClick(targetQ, targetR) {
 // the displayed sprite is refreshed.  Movement is linear and occurs
 // over MOVE_DURATION milliseconds per tile.
 function animateMovement(path) {
-  // Recursively animate the character along the provided sequence of axial
-  // coordinates.  Instead of using the Tween Timeline API (which can be
-  // unavailable on some Phaser builds), we chain individual tweens.  At
-  // the end of each tween the function calls itself with the remaining
-  // path.  The onStart callback updates the character’s axial position
-  // and facing so that the displayed sprite changes at the correct time.
   if (!path || path.length === 0) {
     return;
   }
@@ -453,16 +460,14 @@ function animateMovement(path) {
       } else if (dq === -1 && dr === 1) {
         character.facing = 'left-down';
       }
-      // Update the displayed sprite
       updateCharacterSprite.call(this);
     },
     onComplete: () => {
+      // Continue with the rest of the path
       animateMovement.call(this, rest);
     }
   });
 }
 
-// Instantiate the Phaser game.  The configuration above supplies all
-// necessary parameters.  This call immediately triggers the preload
-// and create functions on the defined scene.
+// Boot the Phaser game
 const game = new Phaser.Game(config);

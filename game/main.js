@@ -294,10 +294,12 @@ function create() {
   // container rotates the entire scene around its centre.
   gridContainer = this.add.container(this.scale.width / 2, this.scale.height / 2);
   const hexPoints = createHexPoints();
-  // Scale the grid container in the Y direction to simulate the
-  // isometric perspective of the original prototype.  A scale of 0.5
-  // compresses vertical distances, producing a subtle slanted view.
-  gridContainer.setScale(1, 0.5);
+  // Do not scale the grid container.  Keeping a uniform scale ensures
+  // each hex remains a perfect regular hexagon.  Previously we
+  // attempted to compress the vertical axis to simulate an isometric
+  // perspective, but that distorted the hex shape so that it
+  // no longer looked the same when rotated by 60°.  By leaving the
+  // scale at (1, 1) the hexes rotate uniformly and remain identical.
   // Add tiles to the container
   tilePositions.forEach(tile => {
     const poly = this.add.polygon(tile.x + offsetX, tile.y + offsetY, hexPoints, 0xffffff);
@@ -353,8 +355,9 @@ function create() {
     const sin = Math.sin(rad);
     const xUnrot = localX * cos + localY * sin;
     const yUnrot = -localX * sin + localY * cos;
-    // Undo the container’s scaling (Y axis) to convert to original
-    // hex coordinate space.  scaleX is 1 and scaleY is 0.5.
+    // Remove any scaling.  The grid container is no longer scaled,
+    // so scaleX and scaleY are both 1.  We retain these variables
+    // for clarity should scaling be reintroduced in the future.
     const scaleX = gridContainer.scaleX;
     const scaleY = gridContainer.scaleY;
     const xScaled = xUnrot / scaleX;

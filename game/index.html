@@ -2,7 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Isometric Hex Prototype</title>
+    <title>Isometric Hex Game Prototype (Phaser 3)</title>
+    <!--
+      This HTML file boots a Phaser 3 implementation of the hex‑based
+      isometric tactical RPG prototype.  It matches the original layout
+      (800×600 canvas centred on a dark background) and loads the
+      accompanying JavaScript from main.js.  The Phaser library is
+      pulled from a CDN to avoid bundling the library into the repository.
+    -->
     <style>
       /* Centre the game canvas within the viewport */
       body {
@@ -14,18 +21,13 @@
         height: 100vh;
       }
     </style>
+    <!-- Load Phaser 3 from a CDN.  Using a versioned URL ensures the
+         loaded library remains stable over time. -->
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.js"></script>
   </head>
   <body>
+    <!-- Phaser will inject its canvas element into this container. -->
     <div id="phaser-container"></div>
-    <!-- Phaser core library -->
-    <script src="https://cdn.jsdelivr.net/npm/phaser@3.85.0/dist/phaser.js"></script>
-    <!-- We deliberately omit the external isometric plugin because the
-         execution environment cannot fetch it due to network
-         restrictions.  Instead, the isometric projection logic is
-         implemented directly within main.js.  If you wish to use
-         phaser3-plugin-isometric in your own setup, you can reintroduce
-         the script tag here. -->
-    <!-- Main game code -->
     <script src="main.js"></script>
   </body>
 </html>

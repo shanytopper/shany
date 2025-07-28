@@ -47,8 +47,10 @@ const spriteMap = {
 // Global camera angle (in degrees).  This value is updated when the
 // player presses Q or E and determines how the grid and character are
 // rotated on screen.  The angle is always normalised to the range
-// [0,360).
-let cameraAngle = 0;
+// [0,360).  Set the initial camera angle to 30° to match the
+// isometric perspective of the original prototype.  Without this
+// initial rotation the grid appears top‑down.
+let cameraAngle = 30;
 
 // References to the primary game objects.  These are assigned once
 // during scene creation and then mutated as the game runs.
@@ -75,6 +77,41 @@ function axialToPixel(q, r) {
   const x = HEX_RADIUS * Math.sqrt(3) * (q + r / 2);
   const y = HEX_RADIUS * 1.5 * r;
   return { x, y };
+}
+
+// Convert pixel (x,y) coordinates back into axial (q,r) coordinates for
+// a pointy‑top hex grid.  The inverse of axialToPixel() requires
+// rounding to the nearest integer axial coordinate.  The formulas
+// derive from standard axial coordinate conversion: see
+// https://www.redblobgames.com/grids/hex‑grids/#hex‑to‑pixel
+function pixelToAxial(x, y) {
+  const q = (Math.sqrt(3) / 3 * x - 1 / 3 * y) / HEX_RADIUS;
+  const r = (2 / 3 * y) / HEX_RADIUS;
+  return axialRound(q, r);
+}
+
+// Round fractional axial coordinates to the nearest integer hex.  This
+// uses cube coordinate rounding to ensure the sum q + r + s = 0
+// constraint is preserved.  See
+// https://www.redblobgames.com/grids/hex‑grids/#rounding for details.
+function axialRound(q, r) {
+  let x = q;
+  let z = r;
+  let y = -x - z;
+  let rx = Math.round(x);
+  let ry = Math.round(y);
+  let rz = Math.round(z);
+  const xDiff = Math.abs(rx - x);
+  const yDiff = Math.abs(ry - y);
+  const zDiff = Math.abs(rz - z);
+  if (xDiff > yDiff && xDiff > zDiff) {
+    rx = -ry - rz;
+  } else if (yDiff > zDiff) {
+    ry = -rx - rz;
+  } else {
+    rz = -rx - ry;
+  }
+  return { q: rx, r: rz };
 }
 
 // Rotate an (x,y) vector by the given angle in degrees.  Positive
@@ -257,20 +294,23 @@ function create() {
   // container rotates the entire scene around its centre.
   gridContainer = this.add.container(this.scale.width / 2, this.scale.height / 2);
   const hexPoints = createHexPoints();
-  // Precreate a Polygon geometry for input hit testing.  This avoids
-  // repeatedly allocating new polygons for each tile’s hit area.
-  const hitArea = new Phaser.Geom.Polygon(hexPoints);
+  // Scale the grid container in the Y direction to simulate the
+  // isometric perspective of the original prototype.  A scale of 0.5
+  // compresses vertical distances, producing a subtle slanted view.
+  gridContainer.setScale(1, 0.5);
   // Add tiles to the container
   tilePositions.forEach(tile => {
     const poly = this.add.polygon(tile.x + offsetX, tile.y + offsetY, hexPoints, 0xffffff);
     poly.setStrokeStyle(1, 0x000000);
-    poly.setInteractive(hitArea, Phaser.Geom.Polygon.Contains);
+    // Make the tile respond to pointer input.  Using the default
+    // rectangle hit area rather than a rotated polygon simplifies
+    // interaction, especially once the container is scaled and rotated.
+    poly.setInteractive({ useHandCursor: true });
     // Store axial indices on the polygon for easy lookup
     poly.q = tile.q;
     poly.r = tile.r;
-    poly.on('pointerdown', () => {
-      handleTileClick.call(this, poly.q, poly.r);
-    });
+    // We no longer attach a per‑tile pointer handler because
+    // clicks are processed globally in a single pointerdown callback.
     gridContainer.add(poly);
     tile.gameObject = poly;
   });
@@ -293,8 +333,43 @@ function create() {
     cameraAngle = (cameraAngle + ROTATION_STEP) % 360;
     updateRotation.call(this);
   });
-  // Initial rotation update to apply cameraAngle = 0 correctly
+  // Apply the initial rotation (cameraAngle defaults to 30°) to
+  // position the grid in its isometric perspective.
   updateRotation.call(this);
+
+  // Global pointer handler.  When the player clicks anywhere in the
+  // scene, convert the pointer’s world coordinates into axial
+  // coordinates relative to the grid container.  This bypasses
+  // potential issues with interactive areas not accounting for
+  // rotation or scaling.  Only clicks falling within the bounds of
+  // the 5×5 grid trigger movement.
+  this.input.on('pointerdown', (pointer) => {
+    // Determine coordinates relative to the container’s origin
+    let localX = pointer.worldX - gridContainer.x;
+    let localY = pointer.worldY - gridContainer.y;
+    // Undo the container’s rotation to convert to unrotated space
+    const rad = Phaser.Math.DegToRad(cameraAngle);
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const xUnrot = localX * cos + localY * sin;
+    const yUnrot = -localX * sin + localY * cos;
+    // Undo the container’s scaling (Y axis) to convert to original
+    // hex coordinate space.  scaleX is 1 and scaleY is 0.5.
+    const scaleX = gridContainer.scaleX;
+    const scaleY = gridContainer.scaleY;
+    const xScaled = xUnrot / scaleX;
+    const yScaled = yUnrot / scaleY;
+    // Remove the offset applied when placing tiles
+    const px = xScaled - this.offsetX;
+    const py = yScaled - this.offsetY;
+    const axial = pixelToAxial(px, py);
+    const q = axial.q;
+    const r = axial.r;
+    // Check bounds and trigger movement
+    if (q >= 0 && q < GRID_SIZE && r >= 0 && r < GRID_SIZE) {
+      handleTileClick.call(this, q, r);
+    }
+  });
 }
 
 // Apply the current cameraAngle to the grid container and counter‑rotate
@@ -331,7 +406,9 @@ function handleTileClick(targetQ, targetR) {
 // the displayed sprite is refreshed.  Movement is linear and occurs
 // over MOVE_DURATION milliseconds per tile.
 function animateMovement(path) {
-  const timeline = this.tweens.createTimeline();
+  // Use the Tweens manager’s timeline() factory.  createTimeline() is not
+  // available on some Phaser builds, whereas timeline() is widely supported.
+  const timeline = this.tweens.timeline();
   let prevQ = character.q;
   let prevR = character.r;
   path.forEach(step => {

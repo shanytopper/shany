@@ -406,51 +406,57 @@ function handleTileClick(targetQ, targetR) {
 // the displayed sprite is refreshed.  Movement is linear and occurs
 // over MOVE_DURATION milliseconds per tile.
 function animateMovement(path) {
-  // Use the Tweens manager’s timeline() factory.  createTimeline() is not
-  // available on some Phaser builds, whereas timeline() is widely supported.
-  const timeline = this.tweens.timeline();
-  let prevQ = character.q;
-  let prevR = character.r;
-  path.forEach(step => {
-    const { q, r } = step;
-    const tile = tilePositions.find(t => t.q === q && t.r === r);
-    const targetX = tile.x + this.offsetX;
-    const targetY = tile.y + this.offsetY;
-    timeline.add({
-      targets: charSprite,
-      x: targetX,
-      y: targetY,
-      duration: MOVE_DURATION,
-      ease: 'Linear',
-      onStart: () => {
-        // Determine movement delta
-        const dq = q - prevQ;
-        const dr = r - prevR;
-        // Update the character’s axial position
-        character.q = q;
-        character.r = r;
-        // Update world facing based on movement delta
-        if (dq === -1 && dr === 0) {
-          character.facing = 'left';
-        } else if (dq === 0 && dr === -1) {
-          character.facing = 'left-up';
-        } else if (dq === 1 && dr === -1) {
-          character.facing = 'right-up';
-        } else if (dq === 1 && dr === 0) {
-          character.facing = 'right';
-        } else if (dq === 0 && dr === 1) {
-          character.facing = 'right-down';
-        } else if (dq === -1 && dr === 1) {
-          character.facing = 'left-down';
-        }
-        prevQ = q;
-        prevR = r;
-        // Update the displayed sprite
-        updateCharacterSprite.call(this);
+  // Recursively animate the character along the provided sequence of axial
+  // coordinates.  Instead of using the Tween Timeline API (which can be
+  // unavailable on some Phaser builds), we chain individual tweens.  At
+  // the end of each tween the function calls itself with the remaining
+  // path.  The onStart callback updates the character’s axial position
+  // and facing so that the displayed sprite changes at the correct time.
+  if (!path || path.length === 0) {
+    return;
+  }
+  // Clone the path to avoid mutating the original array
+  const [step, ...rest] = path;
+  const { q, r } = step;
+  const tile = tilePositions.find(t => t.q === q && t.r === r);
+  const targetX = tile.x + this.offsetX;
+  const targetY = tile.y + this.offsetY;
+  const prevQ = character.q;
+  const prevR = character.r;
+  this.tweens.add({
+    targets: charSprite,
+    x: targetX,
+    y: targetY,
+    duration: MOVE_DURATION,
+    ease: 'Linear',
+    onStart: () => {
+      // Determine movement delta
+      const dq = q - prevQ;
+      const dr = r - prevR;
+      // Update the character’s axial position
+      character.q = q;
+      character.r = r;
+      // Update world facing based on movement delta
+      if (dq === -1 && dr === 0) {
+        character.facing = 'left';
+      } else if (dq === 0 && dr === -1) {
+        character.facing = 'left-up';
+      } else if (dq === 1 && dr === -1) {
+        character.facing = 'right-up';
+      } else if (dq === 1 && dr === 0) {
+        character.facing = 'right';
+      } else if (dq === 0 && dr === 1) {
+        character.facing = 'right-down';
+      } else if (dq === -1 && dr === 1) {
+        character.facing = 'left-down';
       }
-    });
+      // Update the displayed sprite
+      updateCharacterSprite.call(this);
+    },
+    onComplete: () => {
+      animateMovement.call(this, rest);
+    }
   });
-  timeline.play();
 }
 
 // Instantiate the Phaser game.  The configuration above supplies all

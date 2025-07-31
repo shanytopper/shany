@@ -316,7 +316,7 @@ class Room {
           y = Phaser.Math.Between(50, height - 50);
           attempts++;
         } while (
-          Phaser.Math.Distance.Between(x, y, this.scene.player.x, this.scene.player.y) < 200 &&
+          Phaser.Math.Distance.Between(x, y, this.scene.player.x, this.scene.player.y) < 250 &&
           attempts < 20
         );
         let enemy;
@@ -338,7 +338,7 @@ class Room {
         y = Phaser.Math.Between(50, height - 50);
         attempts++;
       } while (
-        Phaser.Math.Distance.Between(x, y, this.scene.player.x, this.scene.player.y) < 150 &&
+        Phaser.Math.Distance.Between(x, y, this.scene.player.x, this.scene.player.y) < 200 &&
         attempts < 20
       );
       const pickup = new Pickup(this.scene, x, y, itemType);
@@ -388,6 +388,11 @@ class MainScene extends Phaser.Scene {
     // Game state flags.
     this.gameOver = false;
     this.victory = false;
+
+      // Invulnerability timer.  While greater than the current time the
+      // player will not take damage.  Used when entering a new room to
+      // give the player a moment to orient themselves.
+      this.invulnerableUntil = 0;
   }
 
   preload() {
@@ -405,8 +410,12 @@ class MainScene extends Phaser.Scene {
     const { width, height } = this.scale;
 
     // Create a tiled background floor.
+    // Draw the floor.  If the texture fails to load, the camera background
+    // colour will still provide a dark backdrop.
     this.floor = this.add.tileSprite(0, 0, width, height, 'floor')
       .setOrigin(0, 0);
+    // Set a dark background colour behind the floor.
+    this.cameras.main.setBackgroundColor(0x1a1a1a);
 
     // World bounds restrict movement to the play area.
     this.physics.world.setBounds(0, 0, width, height);
@@ -451,12 +460,13 @@ class MainScene extends Phaser.Scene {
       new Room(this, { enemies: { chaser: 0, shooter: 0 }, items: [] }),
     ];
 
-    // Spawn the first room.
-    this.loadCurrentRoom();
-
-    // Door instance: a single door reused across rooms.  Initially hidden.
+    // Door instance: a single door reused across rooms.  Create it before
+    // loading the first room so loadCurrentRoom() can safely hide it.
     this.door = new Door(this, width / 2, height - 80);
     this.doors.add(this.door);
+
+    // Spawn the first room after the door exists.
+    this.loadCurrentRoom();
 
     // Collision handlers.
     // Player bullets damage enemies.
@@ -507,6 +517,11 @@ class MainScene extends Phaser.Scene {
     this.currentRoom.spawn();
     // Hide the door until the room is cleared.
     this.door.close();
+
+    // Grant temporary invulnerability at the start of each room.
+    if (this.time) {
+      this.invulnerableUntil = this.time.now + 2000;
+    }
   }
 
   /**
@@ -554,6 +569,10 @@ class MainScene extends Phaser.Scene {
    */
   applyPlayerDamage(amount) {
     if (this.gameOver || this.victory) return;
+    // Do not apply damage during invulnerability period.
+    if (this.time && this.time.now < this.invulnerableUntil) {
+      return;
+    }
     this.health -= amount;
     if (this.health < 0) this.health = 0;
     this.renderHealth();

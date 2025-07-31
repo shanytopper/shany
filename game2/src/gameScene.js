@@ -1,118 +1,52 @@
-// Main entry point for the roguelike POC without using ES modules.  All
-// classes are defined in this file to simplify loading when served from a
-// local file system.  This preserves a clean, object‑oriented structure and
-// implements multiple rooms with randomised order.
+// GameScene coordinates the overall gameplay: loading assets, creating the player,
+// spawning rooms in random order and handling collisions, health and win/lose states.
 
-// Player class: handles movement, health and taking/recuperating damage.
-class Player extends Phaser.Physics.Arcade.Sprite {
-  constructor(scene, x, y) {
-    super(scene, x, y, 'player');
-    scene.add.existing(this);
-    scene.physics.add.existing(this);
-    this.setCollideWorldBounds(true);
-    // Stats
-    this.maxHealth = 3;
-    this.health = this.maxHealth;
-    this.speed = 180;
-    this.cursors = null;
-  }
-  handleMovement() {
-    if (!this.cursors) return;
-    const { W, A, S, D } = this.cursors;
-    const velocity = new Phaser.Math.Vector2(0, 0);
-    if (W.isDown) velocity.y = -1;
-    else if (S.isDown) velocity.y = 1;
-    if (A.isDown) velocity.x = -1;
-    else if (D.isDown) velocity.x = 1;
-    velocity.normalize();
-    this.setVelocity(velocity.x * this.speed, velocity.y * this.speed);
-  }
-  takeDamage(amount = 1) {
-    this.health -= amount;
-    if (this.health < 0) this.health = 0;
-  }
-  heal(amount = 1) {
-    this.health += amount;
-    if (this.health > this.maxHealth) this.health = this.maxHealth;
-  }
-}
+import Player from './player.js';
+import Enemy from './enemy.js';
+import Room from './room.js';
 
-// Enemy class: simple AI that chases the player and can take damage.
-class Enemy extends Phaser.Physics.Arcade.Sprite {
-  constructor(scene, x, y) {
-    super(scene, x, y, 'enemy');
-    scene.add.existing(this);
-    scene.physics.add.existing(this);
-    this.setCollideWorldBounds(true);
-    this.speed = 70;
-    this.maxHealth = 2;
-    this.health = this.maxHealth;
-    this.player = null;
-  }
-  update() {
-    if (!this.active || !this.player) return;
-    const dx = this.player.x - this.x;
-    const dy = this.player.y - this.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist > 0) {
-      const vx = (dx / dist) * this.speed;
-      const vy = (dy / dist) * this.speed;
-      this.setVelocity(vx, vy);
-    } else {
-      this.setVelocity(0, 0);
-    }
-    this.setRotation(Phaser.Math.Angle.Between(this.x, this.y, this.player.x, this.player.y) + Math.PI / 2);
-  }
-  takeDamage(amount = 1) {
-    this.health -= amount;
-    if (this.health <= 0) {
-      this.health = 0;
-      this.destroy();
-    }
-  }
-}
-
-// Room class: holds definitions for where enemies and items spawn in a room.
-class Room {
-  constructor(definition = {}) {
-    this.enemies = definition.enemies || [];
-    this.items = definition.items || [];
-  }
-}
-
-// GameScene: orchestrates the gameplay, including room progression and UI.
-class GameScene extends Phaser.Scene {
+export default class GameScene extends Phaser.Scene {
   constructor() {
     super('GameScene');
+    // Keep track of the current room index and a flag for game over state
     this.currentRoomIndex = -1;
     this.isGameOver = false;
     this.rooms = [];
     this.roomDefinitions = [];
-    this.lastShotTime = 0;
-    this.shotCooldown = 200;
-    this.hearts = [];
   }
+
   preload() {
+    // Preload assets from the assets folder.  All assets are stored in
+    // phaser_game/assets relative to the index.html so paths are resolved
+    // relative to the root folder when loaded by Phaser.
     this.load.image('player', 'assets/player.png');
     this.load.image('enemy', 'assets/enemy.png');
     this.load.image('bullet', 'assets/bullet.png');
     this.load.image('floor', 'assets/floor.png');
     this.load.image('item', 'assets/item.png');
-    this.load.image('heartIcon', 'assets/item.png');
+    this.load.image('heartIcon', 'assets/item.png'); // reuse item sprite for UI hearts
   }
+
   create() {
-    // Use game config width/height for layout
+    // Set world bounds equal to the camera size. Each room will fill this area.
     const width = this.game.config.width;
     const height = this.game.config.height;
-    // Floor tiling
+
+    // Create a repeating floor texture covering the entire scene. We tile
+    // individual sprites instead of using a TileSprite so we can easily
+    // adjust scaling later without heavy performance concerns for a POC.
     const tileSize = 64;
     for (let x = 0; x < width; x += tileSize) {
       for (let y = 0; y < height; y += tileSize) {
         const tile = this.add.image(x, y, 'floor').setOrigin(0, 0);
+        // Each floor sprite is 32×32 pixels; scale to 64×64.
         tile.setScale(2);
       }
     }
-    // Groups
+
+    // Create groups for bullets, enemies and items.  Bullets are limited in
+    // number; when a bullet leaves the screen or hits an enemy it will be
+    // disabled and reused later.
     this.bullets = this.physics.add.group({
       classType: Phaser.Physics.Arcade.Image,
       maxSize: 40,
@@ -120,18 +54,33 @@ class GameScene extends Phaser.Scene {
     });
     this.enemies = this.physics.add.group();
     this.items = this.physics.add.group();
-    // Player
-    this.player = new Player(this, width / 2, height / 2);
+
+    // Create the player in the centre of the first room.  The player class
+    // extends Physics.Arcade.Sprite so it already has a physics body.
+    const spawnX = width / 2;
+    const spawnY = height / 2;
+    this.player = new Player(this, spawnX, spawnY);
     this.player.cursors = this.input.keyboard.addKeys('W,A,S,D');
-    // Input for shooting
+
+    // Configure bullet shooting
+    this.lastShotTime = 0;
+    this.shotCooldown = 200; // milliseconds between shots
     this.input.on('pointerdown', this.shootBullet, this);
-    // Collisions
+
+    // Create collision handlers
     this.physics.add.overlap(this.bullets, this.enemies, this.handleBulletEnemyCollision, undefined, this);
     this.physics.add.overlap(this.player, this.enemies, this.handlePlayerEnemyCollision, undefined, this);
     this.physics.add.overlap(this.player, this.items, this.handlePlayerItemCollision, undefined, this);
-    // Hearts UI
+
+    // Create the heart UI showing current health. We'll add icons and update
+    // them when health changes.  The hearts are 16×16 pixel sprites scaled
+    // slightly for visibility.
+    this.hearts = [];
     this.updateHeartsDisplay();
-    // Define rooms
+
+    // Define several rooms ahead of time. Each room defines where enemies
+    // and items spawn.  The order of rooms will be shuffled when the
+    // game starts to provide variety between runs.
     this.roomDefinitions = [
       new Room({
         enemies: [ { x: width * 0.25, y: height * 0.25 }, { x: width * 0.75, y: height * 0.25 }, { x: width * 0.5, y: height * 0.75 } ],
@@ -150,11 +99,20 @@ class GameScene extends Phaser.Scene {
         items: [ ]
       })
     ];
-    // Shuffle room order
+    // Randomize the order of rooms for this run. Copy the array first to avoid
+    // modifying the original definitions if we reset later.
+    // Shuffle room order. Use our own shuffle helper to avoid relying on Phaser.Utils.Array.Shuffle
     this.rooms = this.shuffleArray(this.roomDefinitions.slice());
     this.currentRoomIndex = -1;
+    // Defer loading the first room slightly so that physics bodies are fully initialised
     this.time.delayedCall(100, () => this.loadNextRoom(), [], this);
   }
+
+  /**
+   * Shuffle helper for browsers where Phaser.Utils.Array.Shuffle may not be available.
+   * Not currently used because Phaser.Utils.Array.Shuffle exists, but kept here
+   * for reference.
+   */
   shuffleArray(array) {
     for (let i = array.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -162,22 +120,31 @@ class GameScene extends Phaser.Scene {
     }
     return array;
   }
+
+  /**
+   * Load the next room in the shuffled list. If there are no more rooms
+   * remaining, trigger a win state.
+   */
   loadNextRoom() {
+    // If the game has ended, do not load further rooms.
     if (this.isGameOver) return;
     this.currentRoomIndex++;
     if (this.currentRoomIndex >= this.rooms.length) {
       this.winGame();
       return;
     }
-    // Clear old objects
+    // Clear all existing enemies, items and bullets.  Use true flag to
+    // destroy children so we don't leak objects.
     this.bullets.clear(true, true);
     this.enemies.clear(true, true);
     this.items.clear(true, true);
-    // Reset player
+
+    // Reset player to the centre of the room.
     const width = this.game.config.width;
     const height = this.game.config.height;
     this.player.setPosition(width / 2, height / 2);
-    // Spawn new room
+
+    // Spawn new enemies and items from the room definition.
     const room = this.rooms[this.currentRoomIndex];
     room.enemies.forEach(pos => {
       const enemy = new Enemy(this, pos.x, pos.y);
@@ -190,6 +157,13 @@ class GameScene extends Phaser.Scene {
       this.items.add(item);
     });
   }
+
+  /**
+   * Fire a bullet from the player towards the pointer location.  Bullets are
+   * pooled; if no inactive bullet is available the shot will be skipped. A
+   * cooldown prevents shooting too rapidly.
+   * @param {Phaser.Input.Pointer} pointer The pointer causing the event.
+   */
   shootBullet(pointer) {
     if (this.isGameOver) return;
     const now = this.time.now;
@@ -197,34 +171,57 @@ class GameScene extends Phaser.Scene {
     this.lastShotTime = now;
     const bullet = this.bullets.get();
     if (!bullet) return;
+    // Prepare the bullet sprite.  When using physics groups, get() returns
+    // either an existing inactive sprite or creates a new one.  We need
+    // to reactivate it manually.
     bullet.setActive(true);
     bullet.setVisible(true);
     bullet.setTexture('bullet');
     bullet.setScale(1.4);
+    // Re-enable and reset the physics body before setting velocity
     bullet.body.enable = true;
     bullet.body.reset(this.player.x, this.player.y);
+    // Compute direction from player to pointer and normalise
     const dx = pointer.worldX - this.player.x;
     const dy = pointer.worldY - this.player.y;
     const dist = Math.hypot(dx, dy);
     if (dist < 8) {
+      // Do not spawn a bullet if clicking on the player; disable and exit
       bullet.disableBody(true, true);
       return;
     }
     const angle = Math.atan2(dy, dx);
     const speed = 420;
     bullet.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+    // Rotate bullet sprite so it visually points along its trajectory
     bullet.setRotation(angle + Math.PI / 2);
+    // Schedule the bullet to be deactivated after 2 seconds
     this.time.delayedCall(2000, () => {
       if (bullet.active) bullet.disableBody(true, true);
     });
   }
+
+  /**
+   * Handle collision between a bullet and an enemy.  Damages the enemy and
+   * disables the bullet.  If all enemies are defeated, schedule the next room.
+   * @param {Phaser.Physics.Arcade.Image} bullet The bullet sprite.
+   * @param {Enemy} enemy The enemy instance.
+   */
   handleBulletEnemyCollision(bullet, enemy) {
     enemy.takeDamage(1);
     bullet.disableBody(true, true);
+    // If this enemy was destroyed (health reached 0), check if all enemies are dead
     if (!enemy.active && this.enemies.countActive(true) === 0) {
+      // Delay moving to next room slightly to allow last enemy to be fully destroyed
       this.time.delayedCall(500, () => this.loadNextRoom(), [], this);
     }
   }
+
+  /**
+   * Handle collision between the player and an enemy.  Damages the player,
+   * removes the enemy and updates the UI.  If player's health drops to zero
+   * trigger a game over.
+   */
   handlePlayerEnemyCollision(player, enemy) {
     if (this.isGameOver) return;
     this.player.takeDamage(1);
@@ -234,13 +231,23 @@ class GameScene extends Phaser.Scene {
       this.gameOver();
     }
   }
+
+  /**
+   * Handle collision between the player and an item (heart).  Restores health
+   * up to the maximum and removes the item from the scene.
+   */
   handlePlayerItemCollision(player, item) {
     if (this.isGameOver) return;
     this.player.heal(1);
     this.updateHeartsDisplay();
     item.destroy();
   }
+
+  /**
+   * Update the hearts UI to match the player's current health.
+   */
   updateHeartsDisplay() {
+    // Remove any existing heart icons
     this.hearts.forEach(icon => icon.destroy());
     this.hearts = [];
     const spacing = 32;
@@ -250,21 +257,35 @@ class GameScene extends Phaser.Scene {
       const heart = this.add.image(x, y, 'heartIcon').setOrigin(0, 0);
       heart.setScale(1.2);
       if (i >= this.player.health) {
+        // Tint empty hearts dark
         heart.setTint(0x333333);
       }
       this.hearts.push(heart);
     }
   }
+
+  /**
+   * Called on every frame.  Delegates movement to the player and ensures
+   * rotation towards the pointer.  No heavy logic is performed here.
+   */
   update() {
     if (this.isGameOver) return;
+    // Player movement
     this.player.handleMovement();
+    // Rotate player to face the pointer
     const pointer = this.input.activePointer;
     const angle = Math.atan2(pointer.worldY - this.player.y, pointer.worldX - this.player.x);
     this.player.setRotation(angle + Math.PI / 2);
+    // Update each enemy's AI
     this.enemies.getChildren().forEach(enemy => {
       if (enemy.update) enemy.update();
     });
   }
+
+  /**
+   * Trigger a win state when the player clears all rooms.  Stops physics and
+   * displays a victory message.
+   */
   winGame() {
     if (this.isGameOver) return;
     this.isGameOver = true;
@@ -273,6 +294,11 @@ class GameScene extends Phaser.Scene {
     const height = this.game.config.height;
     this.add.text(width / 2, height / 2, 'You Win!', { font: '32px Arial', fill: '#ffffff' }).setOrigin(0.5);
   }
+
+  /**
+   * Trigger a game over state when the player's health drops to zero.  Stops
+   * physics and displays a message.  Prevents further input handling.
+   */
   gameOver() {
     if (this.isGameOver) return;
     this.isGameOver = true;
@@ -283,19 +309,3 @@ class GameScene extends Phaser.Scene {
     this.add.text(width / 2, height / 2, 'Game Over', { font: '32px Arial', fill: '#ff0000' }).setOrigin(0.5);
   }
 }
-
-// Configure and start the Phaser game
-const config = {
-  type: Phaser.AUTO,
-  width: 800,
-  height: 600,
-  physics: {
-    default: 'arcade',
-    arcade: {
-      gravity: { y: 0 },
-      debug: false
-    }
-  },
-  scene: [GameScene]
-};
-const game = new Phaser.Game(config);

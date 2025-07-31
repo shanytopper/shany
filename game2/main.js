@@ -267,6 +267,12 @@ class Door extends Phaser.Physics.Arcade.Sprite {
     this.setActive(true);
     this.setVisible(true);
     this.body.enable = true;
+    // For static bodies we need to update the physics body's position
+    // after moving the GameObject.  Without this call the body will
+    // remain at its old location, causing overlap detection to fail.
+    if (this.body.updateFromGameObject) {
+      this.body.updateFromGameObject();
+    }
   }
 
   /**

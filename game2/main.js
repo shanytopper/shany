@@ -15,6 +15,12 @@ class MainScene extends Phaser.Scene {
     this.maxHealth = 3;
     this.health = 3;
     this.healthIcons = [];
+
+    // Flags to indicate end‑of‑round conditions.  When true, the update
+    // loop will stop spawning logic and display a message.  Using flags
+    // prevents repeatedly creating texts or pausing physics multiple times.
+    this.gameOver = false;
+    this.victory = false;
   }
 
   preload() {
@@ -66,12 +72,25 @@ class MainScene extends Phaser.Scene {
     // tracks the player using simple homing behaviour and can absorb a
     // couple of hits before dying.
     this.enemies = this.physics.add.group();
-    for (let i = 0; i < 5; i++) {
-      const ex = Phaser.Math.Between(50, width - 50);
-      const ey = Phaser.Math.Between(50, height - 50);
+    // Spawn enemies at positions away from the player.  To avoid
+    // instant deaths at the beginning of the game, choose random
+    // positions until they are at least 200 pixels from the player.
+    const enemyCount = 5;
+    for (let i = 0; i < enemyCount; i++) {
+      let ex, ey;
+      let attempts = 0;
+      do {
+        ex = Phaser.Math.Between(50, width - 50);
+        ey = Phaser.Math.Between(50, height - 50);
+        attempts++;
+      } while (
+        Phaser.Math.Distance.Between(ex, ey, this.player.x, this.player.y) < 200 &&
+        attempts < 20
+      );
       const enemy = this.enemies.create(ex, ey, 'enemy');
       enemy.setScale(0.4);
       enemy.setCollideWorldBounds(true);
+      // Each enemy takes two hits to kill.
       enemy.health = 2;
     }
 
@@ -93,6 +112,19 @@ class MainScene extends Phaser.Scene {
 
     // Draw the health bar.
     this.renderHealth();
+
+    // Ensure current health matches the maximum at the start of the scene.  In
+    // some environments the constructor assignment can be lost before
+    // create() executes, so explicitly set health here.
+    this.health = this.maxHealth;
+
+    // Delay end‑game checks for a brief period after the scene starts.  Without
+    // this grace period the game might immediately end if enemies spawn
+    // overlapping the player or are deactivated before the first update.
+    this.canCheckEnd = false;
+    this.time.delayedCall(1000, () => {
+      this.canCheckEnd = true;
+    });
   }
 
   update() {
@@ -153,6 +185,38 @@ class MainScene extends Phaser.Scene {
       const bAngle = Math.atan2(bVel.y, bVel.x);
       bullet.setRotation(bAngle + Math.PI / 2);
     });
+
+    // Check for game‑over or victory conditions after movement and bullet
+    // updates, but only after the scene has been running long enough to
+    // allow the player to act.  Without the canCheckEnd flag the game
+    // might immediately end on the first frame.
+    if (this.canCheckEnd) {
+      if (!this.gameOver && this.health <= 0) {
+        this.gameOver = true;
+        this.physics.pause();
+        this.player.setTint(0xff0000);
+        this.add
+          .text(width / 2, height / 2, 'Game Over', {
+            fontSize: '48px',
+            fill: '#ff4444',
+            stroke: '#000',
+            strokeThickness: 4,
+          })
+          .setOrigin(0.5);
+      }
+      if (!this.victory && this.enemies.countActive(true) === 0) {
+        this.victory = true;
+        this.physics.pause();
+        this.add
+          .text(width / 2, height / 2, 'You Win!', {
+            fontSize: '48px',
+            fill: '#44ff44',
+            stroke: '#000',
+            strokeThickness: 4,
+          })
+          .setOrigin(0.5);
+      }
+    }
   }
 
   shootBullet(pointer) {
@@ -196,6 +260,11 @@ class MainScene extends Phaser.Scene {
       this.health = 0;
     }
     this.renderHealth();
+    // Remove the enemy so it does not repeatedly damage the player on
+    // subsequent frames.  This also frees up the enemy slot for victory
+    // detection.  In a more advanced game you could trigger an
+    // explosion or play a sound here.
+    enemy.disableBody(true, true);
     // Knock the player back slightly for visual feedback.
     const knockbackAngle = Phaser.Math.Angle.Between(enemy.x, enemy.y, player.x, player.y);
     const force = 200;

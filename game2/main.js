@@ -229,7 +229,21 @@ class MainScene extends Phaser.Scene {
     bullet.setActive(true);
     bullet.setVisible(true);
     bullet.setScale(1.5);
+    // Re‑enable the physics body.  disableBody() turns the body off, so
+    // without re‑enabling the body the bullet would appear but never move.
+    bullet.body.enable = true;
     bullet.body.reset(this.player.x, this.player.y);
+    // If the pointer is extremely close to the player, skip firing to
+    // prevent bullets from appearing to get stuck.  The distance check
+    // avoids dividing by zero when computing the angle.
+    const dx = pointer.worldX - this.player.x;
+    const dy = pointer.worldY - this.player.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 10) {
+      // Immediately disable the bullet and do nothing.
+      bullet.disableBody(true, true);
+      return;
+    }
     const angle = Phaser.Math.Angle.Between(
       this.player.x,
       this.player.y,

@@ -1,4 +1,4 @@
-import Phaser from 'phaser'
+const Phaser = globalThis.Phaser;  
 import { Player } from '../entities/Player.js'
 import { Enemy } from '../entities/Enemy.js'
 import { DungeonGenerator } from '../systems/DungeonGenerator.js'

@@ -1,4 +1,4 @@
-import Phaser from 'phaser'
+const Phaser = globalThis.Phaser;  
 
 export class BootScene extends Phaser.Scene {
   constructor() {

@@ -1,0 +1,29 @@
+{
+  "name": "workspace",
+  "version": "1.0.0",
+  "description": "This repository now includes a simple GraphQL proof of concept built with [HotChocolate](https://chillicream.com/docs/hotchocolate) v15. The service uses an in-memory dictionary as its datasource and exposes both a query and a mutation.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shanytopper/shany.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/shanytopper/shany/issues"
+  },
+  "homepage": "https://github.com/shanytopper/shany#readme",
+  "dependencies": {
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0"
+  }
+}

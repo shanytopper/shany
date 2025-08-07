@@ -1,4 +1,4 @@
-import Phaser from 'phaser'
+import Phaser from '../node_modules/phaser/dist/phaser.js'
 import { BootScene } from './scenes/BootScene.js'
 import { DungeonScene } from './scenes/DungeonScene.js'
 import { UIScene } from './scenes/UIScene.js'

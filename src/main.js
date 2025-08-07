@@ -1,11 +1,10 @@
-import Phaser from '../node_modules/phaser/dist/phaser.js'
 import { BootScene } from './scenes/BootScene.js'
 import { DungeonScene } from './scenes/DungeonScene.js'
 import { UIScene } from './scenes/UIScene.js'
 
 const WIDTH = 960
 const HEIGHT = 540
-
+const { Scene, Game, AUTO } = Phaser;
 const config = {
   type: Phaser.AUTO,
   parent: 'app',

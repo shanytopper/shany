@@ -1,10 +1,13 @@
-import { BootScene } from './scenes/BootScene.js'
-import { DungeonScene } from './scenes/DungeonScene.js'
-import { UIScene } from './scenes/UIScene.js'
+// main.js
+import { BootScene }   from './scenes/BootScene.js';
+import { DungeonScene } from './scenes/DungeonScene.js';
+import { UIScene }     from './scenes/UIScene.js';
 
-const WIDTH = 960
-const HEIGHT = 540
-const { Scene, Game, AUTO } = Phaser;
+const Phaser = globalThis.Phaser; // grab Phaser from the global scope
+
+const WIDTH  = 960;
+const HEIGHT = 540;
+
 const config = {
   type: Phaser.AUTO,
   parent: 'app',
@@ -19,6 +22,6 @@ const config = {
     }
   },
   scene: [BootScene, DungeonScene, UIScene]
-}
+};
 
-new Phaser.Game(config)
+new Phaser.Game(config);

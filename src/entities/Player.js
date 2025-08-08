@@ -112,9 +112,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   fireBullet(direction) {
     const bullet = this.scene.physics.add.image(this.x, this.y, 'bullet');
     bullet.setDepth(5);
-    // Enlarge the bullet for better visibility and set its body size accordingly.
-    bullet.setScale(2);
-    bullet.setCircle(2 * 2); // radius scales with the scale factor
+    // Use the generated bullet sprite at its native scale (4x4). Set the
+    // physics body size to match half of the visual size for more accurate
+    // collisions.
+    bullet.setScale(1);
+    bullet.setCircle(4); // radius equals half of 8px bullet size
     // Set velocity based on the provided direction. Bullets travel faster than player movement.
     bullet.setVelocity(direction.x * 360, direction.y * 360);
     bullet.lifespanMs = 700;

@@ -30,9 +30,12 @@ export class BootScene extends Phaser.Scene {
     // easier to define inline. The player and enemy textures are now
     // provided by loaded spritesheets.
     this.textures.generate('bullet', {
+      // Generate a larger bullet sprite by increasing pixel size. A single
+      // character 'F' will produce a 4x4 square bullet, making it easier to
+      // see when fired across the room.
       data: ['F'],
-      pixelWidth: 1,
-      pixelHeight: 1,
+      pixelWidth: 4,
+      pixelHeight: 4,
       palette: { F: '#f5e663' },
     });
     this.textures.generate('door', {

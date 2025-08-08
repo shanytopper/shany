@@ -131,15 +131,21 @@ export class DungeonScene extends Phaser.Scene {
     // In room 0, door leads to room 1; in room 1, door leads back to 0
     const doorX = this.scale.width - wallThickness - 20;
     const doorY = this.scale.height / 2;
-    const door = this.add.image(doorX, doorY, 'door');
+    const door = this.physics.add.staticImage(doorX, doorY, 'door');
+	door.nextIndex = index === 0 ? 1 : 0;
     door.setInteractive();
-    door.on('pointerdown', () => {
-      // Only allow exit if enemies are cleared
-      if (this.enemies.countActive(true) === 0) {
-        const nextIndex = index === 0 ? 1 : 0;
-        this.loadRoom(nextIndex);
-      }
-    });
+    door.setInteractive();
+	door.on('pointerdown', () => {
+	if (this.enemies.countActive(true) === 0) {
+		this.loadRoom(door.nextIndex);
+	}
+	});
+	this.physics.add.overlap(this.player, door, () => {
+	if (this.enemies.countActive(true) === 0) {
+		this.loadRoom(door.nextIndex);
+	}
+	});
+
     this.roomObjects.add(door);
   }
 

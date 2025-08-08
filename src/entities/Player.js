@@ -110,7 +110,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   }
 
   fireBullet(direction) {
-    const bullet = this.scene.physics.add.image(this.x, this.y, 'bullet');
+    // Spawn the bullet slightly offset from the player so that it doesn’t
+    // immediately collide with the player's body. The offset distance
+    // corresponds to twice the player's sprite size (16px * scale).
+    const offset = 16 * 2; // 16px frame size * scale factor (2)
+    const spawnX = this.x + direction.x * offset;
+    const spawnY = this.y + direction.y * offset;
+    const bullet = this.scene.physics.add.image(spawnX, spawnY, 'bullet');
     bullet.setDepth(5);
     // Use the generated bullet sprite at its native scale (4x4). Set the
     // physics body size to match half of the visual size for more accurate

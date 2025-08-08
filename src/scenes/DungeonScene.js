@@ -17,7 +17,9 @@ export class DungeonScene extends Phaser.Scene {
     this.roomObjects = this.add.group();
     // Physics groups
     this.walls = this.physics.add.staticGroup();
-    this.enemies = this.add.group({ runChildUpdate: true });
+    // Use a physics-enabled group for enemies so they automatically
+    // participate in collisions and physics updates.
+    this.enemies = this.physics.add.group();
 
     // Instantiate the player in the center of the scene
     this.player = new Player(this, this.scale.width / 2, this.scale.height / 2);

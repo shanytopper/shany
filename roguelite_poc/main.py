@@ -34,7 +34,7 @@ import random
 import pygame
 import json
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Callable
+from typing import Dict, List, Optional, Tuple
 
 
 # -----------------------------------------------------------------------------
@@ -96,65 +96,12 @@ SPLITTER_PROBABILITY: float = 0.15
 MINI_ENEMY_HEALTH: int = 10
 MINI_ENEMY_SPEED: float = ENEMY_SPEED * 1.3
 
-# Teleporter enemy parameters.  Teleporter enemies periodically teleport to
-# random positions instead of continuously chasing the player.
-TELEPORTER_PROBABILITY: float = 0.10
-TELEPORT_COOLDOWN_MS: int = 2000
-
 # Bomb parameters.  Bombs are obtained via upgrades and can be deployed by
 # pressing the 'B' key.  After a short fuse they explode, dealing area‑of‑effect
 # damage to all enemies within the given radius.
 BOMB_FUSE_MS: int = 1000
 BOMB_RADIUS: float = 80.0
 BOMB_DAMAGE: int = 40
-
-# -----------------------------------------------------------------------------
-# Currency, shop and environmental parameters
-#
-# Gold (currency) drops from enemies and barrels.  Each coin is worth a fixed
-# amount of gold.  Barrels can also drop coins when destroyed.  Traps and
-# shops are optional room features that add variety.  These values control
-# probabilities and effects.
-
-# Range of gold values when spawning coins (min to max).  Enemies and barrels
-# spawn a number of coins in this range.  Each coin has a value of 1.
-GOLD_MIN: int = 1
-GOLD_MAX: int = 3
-
-# Health of destructible barrels.  Barrels block bullets (but not movement).
-# When destroyed they may drop coins or potions.
-BARREL_HEALTH: int = 20
-
-# Probability that a destroyed barrel drops a potion instead of gold.  A value
-# between 0 and 1.  If a potion is dropped, the barrel will not drop coins.
-BARREL_DROP_POTION_PROB: float = 0.2
-
-# Spike trap timing and damage.  Spikes alternate between active and inactive
-# phases.  When active, they deal damage to the player (or enemies) on
-# contact.
-SPIKE_ACTIVE_MS: int = 1500
-SPIKE_INACTIVE_MS: int = 1000
-SPIKE_DAMAGE: int = 15
-
-# Probability that a room is a shop (excluding the first and last room).
-SHOP_PROBABILITY: float = 0.2
-
-# Shop upgrade offerings.  Each entry maps a name to a tuple of (effect,
-# price).  Effects are callables that accept a Player and apply the upgrade.
-# Prices are expressed in units of gold.  Additional effects can be added
-# easily to expand the shop inventory.
-SHOP_UPGRADES: Dict[str, Tuple[Callable, int]] = {
-    # Grant extra bombs at a modest cost
-    'Bigger Bomb': (lambda p: setattr(p, 'bombs', p.bombs + 2), 5),
-    # Increase maximum health and heal the player
-    'Heart Container': (lambda p: (setattr(p, 'max_health', p.max_health + 20), setattr(p, 'health', min(p.max_health + 20, p.health + 20))), 6),
-    # Increase bullet damage but reduce maximum health (glass cannon)
-    'Glass Cannon': (lambda p: (setattr(p, 'bullet_damage', p.bullet_damage + 10), setattr(p, 'max_health', max(10, p.max_health - 20)), setattr(p, 'health', min(p.health, p.max_health))), 8),
-    # Add multiple shield charges
-    'Shield Boost': (lambda p: setattr(p, 'shield', p.shield + 3), 7),
-    # Further reduce fire rate for rapid shooting
-    'Rapid Fire+': (lambda p: setattr(p, 'fire_rate_ms', max(20, p.fire_rate_ms - 70)), 6),
-}
 
 # Upgrade definitions.  When a room (except the last) is cleared, an upgrade
 # spawns.  The upgrade chosen randomly from this set will modify the player
@@ -198,9 +145,6 @@ class Room:
     enemy_count: int
     has_potion: bool
     cleared: bool = False
-    # Flag indicating whether this room is a shop.  Shop rooms do not spawn
-    # enemies or potions and instead contain purchasable upgrades.
-    is_shop: bool = False
 
 
 class Dungeon:
@@ -211,24 +155,6 @@ class Dungeon:
             # placeholder neighbors; actual connections assigned later
             self.rooms.append(Room(index=i, neighbors={}, enemy_count=rand_int(2, 4), has_potion=(random.random() < 0.4)))
         self._create_connections()
-
-        # Determine which rooms will become shops.  Shops are excluded from the
-        # first and last room and do not spawn enemies or potions.  The
-        # probability is controlled by SHOP_PROBABILITY.  Ensure at least one
-        # shop exists by adding a fallback if none were selected.
-        possible_indices = [i for i in range(1, count - 1)]
-        shop_selected = False
-        for i in possible_indices:
-            if random.random() < SHOP_PROBABILITY:
-                self.rooms[i].is_shop = True
-                self.rooms[i].enemy_count = 0
-                self.rooms[i].has_potion = False
-                shop_selected = True
-        if not shop_selected and possible_indices:
-            idx = random.choice(possible_indices)
-            self.rooms[idx].is_shop = True
-            self.rooms[idx].enemy_count = 0
-            self.rooms[idx].has_potion = False
 
     def _create_connections(self) -> None:
         """
@@ -257,20 +183,6 @@ class Dungeon:
                 self.rooms[i].neighbors[RIGHT] = i + 1
                 self.rooms[i + 1].neighbors[LEFT] = i
 
-        # Add extra random connections to introduce loops and branching.  These
-        # connections enhance replayability by allowing rooms to be reached via
-        # multiple paths.  We attempt to create a few additional links between
-        # non‑adjacent rooms, skipping if no free direction exists on either end.
-        extra = max(1, len(self.rooms) // 3)
-        for _ in range(extra):
-            # choose two distinct rooms that are not directly connected in the chain
-            i = random.randint(0, len(self.rooms) - 1)
-            j = random.randint(0, len(self.rooms) - 1)
-            if i == j or abs(i - j) == 1:
-                continue
-            # attempt to connect rooms i and j
-            self._connect_rooms(i, j, [UP, DOWN, LEFT, RIGHT])
-
     def _connect_rooms(self, i: int, target: int, dirs: List[int]) -> None:
         """Connect room i with room `target` if possible using a free direction."""
         available = dirs.copy()
@@ -297,36 +209,6 @@ class Dungeon:
 
     def get_room(self, index: int) -> Room:
         return self.rooms[index]
-
-    def get_layout_positions(self) -> Dict[int, Tuple[int, int]]:
-        """
-        Compute a 2D layout for the dungeon rooms by performing a breadth‑first
-        traversal from the starting room.  Each room is assigned integer
-        coordinates on a grid based on its neighbor directions.  Loops may
-        cause conflicting assignments, but the first discovered path is
-        accepted.
-
-        Returns a mapping from room index to (x, y) grid coordinates.
-        """
-        positions: Dict[int, Tuple[int, int]] = {0: (0, 0)}
-        visited: set[int] = {0}
-        from collections import deque
-        queue = deque([0])
-        while queue:
-            i = queue.popleft()
-            x, y = positions[i]
-            for direction, nb in self.rooms[i].neighbors.items():
-                if nb not in positions:
-                    if direction == UP:
-                        positions[nb] = (x, y - 1)
-                    elif direction == DOWN:
-                        positions[nb] = (x, y + 1)
-                    elif direction == LEFT:
-                        positions[nb] = (x - 1, y)
-                    else:  # RIGHT
-                        positions[nb] = (x + 1, y)
-                    queue.append(nb)
-        return positions
 
 
 # -----------------------------------------------------------------------------
@@ -674,36 +556,6 @@ class SplitterEnemy(Enemy):
         return minis
 
 
-class TeleporterEnemy(Enemy):
-    """Enemy that teleports to a random location at regular intervals."""
-    def __init__(self, x: float, y: float) -> None:
-        super().__init__(x, y)
-        # Teleporters move slowly when chasing the player
-        self.speed = ENEMY_SPEED * 0.5
-        # Timing for teleportation
-        self.last_teleport_time: float = 0.0
-        # Colour distinct from other enemies
-        self.color = (60, 180, 200)
-
-    def update(self, dt: float, player: Player) -> None:
-        if not self.alive:
-            return
-        # Move toward the player like a standard enemy
-        super().update(dt, player)
-        # Teleport occasionally
-        now = pygame.time.get_ticks()
-        if now - self.last_teleport_time >= TELEPORT_COOLDOWN_MS:
-            self.last_teleport_time = now
-            # Choose a random safe position away from the walls
-            new_x = rand_int(60, SCREEN_WIDTH - 60)
-            new_y = rand_int(60, SCREEN_HEIGHT - 60)
-            self.rect.centerx = new_x
-            self.rect.centery = new_y
-
-    def draw(self, surface: pygame.Surface) -> None:
-        pygame.draw.rect(surface, self.color, self.rect)
-
-
 class Potion:
     """Collectible potion that heals the player."""
     def __init__(self, x: float, y: float) -> None:
@@ -756,96 +608,6 @@ class Bomb:
         # effect handled elsewhere)
         if not self.exploded:
             pygame.draw.circle(surface, (100, 100, 100), (int(self.pos.x), int(self.pos.y)), 6)
-
-
-class Barrel:
-    """Destructible barrel that blocks bullets.  When destroyed it may drop
-    coins or a potion.  Barrels are decorative; they do not block player or
-    enemy movement for simplicity.
-    """
-
-    def __init__(self, x: float, y: float) -> None:
-        # Use a modest size for barrels
-        self.rect = pygame.Rect(x, y, 28, 28)
-        self.health: int = BARREL_HEALTH
-        self.alive: bool = True
-
-    def damage(self, amount: int) -> None:
-        """Reduce health by amount and mark as dead when health reaches zero."""
-        if not self.alive:
-            return
-        self.health -= amount
-        if self.health <= 0:
-            self.alive = False
-
-    def draw(self, surface: pygame.Surface) -> None:
-        if self.alive:
-            # Brownish colour for barrels
-            pygame.draw.rect(surface, (150, 100, 50), self.rect)
-
-
-class Coin:
-    """Collectible coin that increases the player's gold when picked up."""
-
-    def __init__(self, x: float, y: float, value: int = 1) -> None:
-        self.rect = pygame.Rect(x, y, 14, 14)
-        self.value: int = value
-        self.collected: bool = False
-
-    def draw(self, surface: pygame.Surface) -> None:
-        if not self.collected:
-            # Draw a gold coin as a small circle
-            pygame.draw.circle(surface, (255, 215, 0), (self.rect.centerx, self.rect.centery), 7)
-
-
-class SpikeTrap:
-    """A trap that alternates between active and inactive phases.  When active
-    and the player (or enemies) touch it, it deals damage.  The trap does
-    not block movement.
-    """
-
-    def __init__(self, x: float, y: float) -> None:
-        self.rect = pygame.Rect(x, y, 32, 32)
-        # internal timer tracks elapsed time in milliseconds
-        self.timer_ms: float = 0.0
-        self.active: bool = False
-
-    def update(self, dt: float) -> None:
-        # accumulate elapsed time
-        self.timer_ms += dt * 1000.0
-        # determine active phase using modulo of total period
-        period = SPIKE_ACTIVE_MS + SPIKE_INACTIVE_MS
-        cycle = self.timer_ms % period
-        self.active = cycle < SPIKE_ACTIVE_MS
-
-    def draw(self, surface: pygame.Surface) -> None:
-        # Colour indicates state: bright red for active, dark grey when inactive
-        color = (200, 50, 50) if self.active else (80, 80, 80)
-        pygame.draw.rect(surface, color, self.rect)
-
-
-class ShopItem:
-    """An item available for purchase in a shop room.  Contains an effect and
-    a price.  Once purchased, the item cannot be bought again."""
-
-    def __init__(self, name: str, effect, price: int, x: float, y: float) -> None:
-        self.name = name
-        self.effect = effect
-        self.price = price
-        self.rect = pygame.Rect(x, y, 24, 24)
-        self.purchased: bool = False
-
-    def apply(self, player: Player) -> None:
-        """Apply the item's effect to the player and mark as purchased."""
-        if not self.purchased:
-            # Some effects may return multiple assignments; ignore return value
-            self.effect(player)
-            self.purchased = True
-
-    def draw(self, surface: pygame.Surface) -> None:
-        # Grey out purchased items
-        color = (40, 100, 160) if not self.purchased else (100, 100, 100)
-        pygame.draw.rect(surface, color, self.rect)
 
 
 class BossEnemy(Enemy):
@@ -959,33 +721,10 @@ class Game:
     def load_room(self, index: int) -> None:
         room = self.dungeon.get_room(index)
         self.current_room_index = index
-        # Mark room as visited for minimap
-        if hasattr(self, 'visited_rooms'):
-            self.visited_rooms.add(index)
         # Reset lists
         self.enemies = []
         self.potions = []
         self.upgrades = []
-        # Reset per‑room currency and environment lists
-        self.coins = []
-        self.barrels = []
-        self.traps = []
-        self.shop_items = []
-        # Determine if this room is a shop.  Shops contain purchasable items
-        # instead of enemies or potions.
-        if room.is_shop:
-            # Spawn up to three unique shop items selected from SHOP_UPGRADES
-            available = list(SHOP_UPGRADES.items())
-            random.shuffle(available)
-            count = min(3, len(available))
-            for i in range(count):
-                name, (effect, price) = available[i]
-                x = rand_int(80, SCREEN_WIDTH - 80)
-                y = rand_int(120, SCREEN_HEIGHT - 120)
-                self.shop_items.append(ShopItem(name, effect, price, x, y))
-            # Clear message and return early
-            self.message = None
-            return
         # Spawn enemies
         # If this is the final room, spawn a boss instead of regular enemies
         if index == ROOM_COUNT - 1:
@@ -996,15 +735,13 @@ class Game:
                 x = rand_int(60, SCREEN_WIDTH - 60)
                 y = rand_int(60, SCREEN_HEIGHT - 60)
                 r = random.random()
-                # Spawn Splitter, Teleporter, Turret, Ranged or Melee enemies based on probabilities.
-                # Remaining probability spawns a normal melee enemy.
+                # Spawn Splitter, Turret, Ranged or Melee enemies based on probabilities.
+                # Note: probabilities sum to less than 1; remaining share goes to melee.
                 if r < SPLITTER_PROBABILITY:
                     self.enemies.append(SplitterEnemy(x, y))
-                elif r < SPLITTER_PROBABILITY + TELEPORTER_PROBABILITY:
-                    self.enemies.append(TeleporterEnemy(x, y))
-                elif r < SPLITTER_PROBABILITY + TELEPORTER_PROBABILITY + TURRET_PROBABILITY:
+                elif r < SPLITTER_PROBABILITY + TURRET_PROBABILITY:
                     self.enemies.append(TurretEnemy(x, y))
-                elif r < SPLITTER_PROBABILITY + TELEPORTER_PROBABILITY + TURRET_PROBABILITY + 0.25:
+                elif r < SPLITTER_PROBABILITY + TURRET_PROBABILITY + 0.30:
                     self.enemies.append(RangedEnemy(x, y))
                 else:
                     self.enemies.append(Enemy(x, y))
@@ -1013,19 +750,6 @@ class Game:
             x = rand_int(60, SCREEN_WIDTH - 60)
             y = rand_int(60, SCREEN_HEIGHT - 60)
             self.potions.append(Potion(x, y))
-        # Spawn environmental objects (barrels and traps) only in non‑boss rooms
-        if index != ROOM_COUNT - 1:
-            # Barrels
-            barrel_count = rand_int(1, 3)
-            for _ in range(barrel_count):
-                bx = rand_int(80, SCREEN_WIDTH - 80)
-                by = rand_int(120, SCREEN_HEIGHT - 120)
-                self.barrels.append(Barrel(bx, by))
-            # Traps: spawn with moderate probability
-            if random.random() < 0.5:
-                tx = rand_int(80, SCREEN_WIDTH - 80)
-                ty = rand_int(120, SCREEN_HEIGHT - 120)
-                self.traps.append(SpikeTrap(tx, ty))
         # Clear message
         self.message = None
 
@@ -1047,29 +771,15 @@ class Game:
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     sys.exit()
-                # Handle keydown events for gameplay
-                if event.type == pygame.KEYDOWN:
-                    # Toggle pause when pressing P
-                    if event.key == pygame.K_p:
-                        if self.state == 'GAME':
-                            self.state = 'PAUSE'
-                        elif self.state == 'PAUSE':
-                            self.state = 'GAME'
-                    # Plant bombs only when playing
-                    if event.key == pygame.K_b and self.state == 'GAME':
+                # Handle bomb planting only during gameplay
+                if event.type == pygame.KEYDOWN and self.state == 'GAME':
+                    if event.key == pygame.K_b:
+                        # Plant a bomb if available
                         if self.player.bombs > 0:
                             cx = self.player.rect.centerx
                             cy = self.player.rect.centery
                             self.bombs.append(Bomb(cx, cy))
                             self.player.bombs -= 1
-                    # Purchase shop item when pressing E
-                    if event.key == pygame.K_e and self.state == 'GAME':
-                        # Player presses E to buy an item if colliding and has enough gold
-                        for item in self.shop_items:
-                            if not item.purchased and self.player.rect.colliderect(item.rect) and self.gold >= item.price:
-                                item.apply(self.player)
-                                self.gold -= item.price
-                                self.show_message(f"Purchased {item.name}!", duration=2.5)
             keys = pygame.key.get_pressed()
 
             # --- Menu state ---
@@ -1102,15 +812,6 @@ class Game:
                             if enemy.alive and bullet.alive and enemy.rect.collidepoint(bullet.pos):
                                 enemy.damage(bullet.damage)
                                 bullet.alive = False
-                    # Bullet vs barrel collisions.  Barrels are destroyed by
-                    # bullets but do not block player movement.  Destroyed
-                    # barrels drop coins or potions when removed later.
-                    for bullet in self.player.bullets:
-                        for barrel in self.barrels:
-                            if barrel.alive and bullet.alive and barrel.rect.collidepoint(bullet.pos):
-                                barrel.damage(bullet.damage)
-                                bullet.alive = False
-
                     # Enemy vs player collisions (melee)
                     for enemy in self.enemies:
                         if enemy.alive and self.player.rect.colliderect(enemy.rect):
@@ -1125,7 +826,6 @@ class Game:
                             dist = max(math.hypot(dx, dy), 0.1)
                             enemy.rect.x += int((dx / dist) * 20)
                             enemy.rect.y += int((dy / dist) * 20)
-
                     # Enemy bullet collisions
                     enemy_bullets: List[EnemyBullet] = []
                     for e in self.enemies:
@@ -1180,75 +880,10 @@ class Game:
                                     dist = math.hypot(bomb.pos.x - enemy.rect.centerx, bomb.pos.y - enemy.rect.centery)
                                     if dist <= BOMB_RADIUS:
                                         enemy.damage(BOMB_DAMAGE)
-                            # Damage barrels as well
-                            for barrel in self.barrels:
-                                if barrel.alive:
-                                    dist = math.hypot(bomb.pos.x - barrel.rect.centerx, bomb.pos.y - barrel.rect.centery)
-                                    if dist <= BOMB_RADIUS:
-                                        barrel.damage(BOMB_DAMAGE)
                             # Show explosion message
                             self.show_message("Boom!", duration=1.0)
                     # Remove bombs that have exploded
                     self.bombs = [b for b in self.bombs if not b.exploded]
-
-                    # Handle destroyed barrels: spawn drops and remove
-                    surviving_barrels: List[Barrel] = []
-                    for barrel in self.barrels:
-                        if barrel.alive:
-                            surviving_barrels.append(barrel)
-                        else:
-                            # Barrel destroyed: drop a potion or coins
-                            cx = barrel.rect.centerx
-                            cy = barrel.rect.centery
-                            if random.random() < BARREL_DROP_POTION_PROB:
-                                # Spawn a potion at the barrel's position
-                                self.potions.append(Potion(cx - 8, cy - 8))
-                            else:
-                                # Spawn a few coins
-                                count = rand_int(GOLD_MIN, GOLD_MAX)
-                                for _ in range(count):
-                                    ox = rand_int(-10, 10)
-                                    oy = rand_int(-10, 10)
-                                    self.coins.append(Coin(cx + ox, cy + oy))
-                    self.barrels = surviving_barrels
-
-                    # Update traps and check for collisions with the player
-                    for trap in self.traps:
-                        trap.update(dt)
-                        if trap.active and self.player.rect.colliderect(trap.rect):
-                            if not self.player.invulnerable:
-                                if self.player.shield > 0:
-                                    self.player.shield -= 1
-                                    self.show_message("Shield absorbed hit!", duration=1.5)
-                                else:
-                                    self.player.damage(SPIKE_DAMAGE)
-
-                    # Coin collection
-                    for coin in self.coins:
-                        if not coin.collected and self.player.rect.colliderect(coin.rect):
-                            coin.collected = True
-                            self.gold += coin.value
-                    # Remove collected coins
-                    self.coins = [c for c in self.coins if not c.collected]
-
-                    # Update traps and check for collisions with the player
-                    for trap in self.traps:
-                        trap.update(dt)
-                        if trap.active and self.player.rect.colliderect(trap.rect):
-                            if not self.player.invulnerable:
-                                if self.player.shield > 0:
-                                    self.player.shield -= 1
-                                    self.show_message("Shield absorbed hit!", duration=1.5)
-                                else:
-                                    self.player.damage(SPIKE_DAMAGE)
-
-                    # Coin collection
-                    for coin in self.coins:
-                        if not coin.collected and self.player.rect.colliderect(coin.rect):
-                            coin.collected = True
-                            self.gold += coin.value
-                    # Remove collected coins
-                    self.coins = [c for c in self.coins if not c.collected]
                     # Remove dead enemies, spawn splits and count kills
                     dead_count = 0
                     survivors: List[Enemy] = []
@@ -1258,18 +893,8 @@ class Game:
                             survivors.append(enemy)
                         else:
                             dead_count += 1
-                            # If this enemy is a splitter, spawn mini enemies
                             if isinstance(enemy, SplitterEnemy):
                                 spawned_minis.extend(enemy.split())
-                            # Spawn coins at the location of the dead enemy
-                            # Each dead enemy produces a small number of coins.
-                            cx = enemy.rect.centerx
-                            cy = enemy.rect.centery
-                            coin_count = rand_int(GOLD_MIN, GOLD_MAX)
-                            for _ in range(coin_count):
-                                ox = rand_int(-10, 10)
-                                oy = rand_int(-10, 10)
-                                self.coins.append(Coin(cx + ox, cy + oy))
                     # Update enemy list: survivors plus newly spawned minis
                     self.enemies = survivors + spawned_minis
                     # Increment kill counter by number of dead enemies (splitting does not affect kills)
@@ -1334,65 +959,12 @@ class Game:
                 # Draw bombs
                 for bomb in self.bombs:
                     bomb.draw(self.screen)
-                # Draw barrels, traps, coins and shop items
-                for barrel in self.barrels:
-                    barrel.draw(self.screen)
-                for trap in self.traps:
-                    trap.draw(self.screen)
-                for coin in self.coins:
-                    coin.draw(self.screen)
-                for item in self.shop_items:
-                    item.draw(self.screen)
                 for enemy in self.enemies:
                     enemy.draw(self.screen)
                 self.player.draw(self.screen)
                 self.draw_ui()
-                # Draw shop item prices if we are in a shop room
-                if room.is_shop:
-                    price_font = pygame.font.Font(None, 20)
-                    for item in self.shop_items:
-                        if not item.purchased:
-                            price_surf = price_font.render(f"{item.price}G", True, (255, 215, 0))
-                            price_rect = price_surf.get_rect(center=(item.rect.centerx, item.rect.bottom + 10))
-                            self.screen.blit(price_surf, price_rect)
                 if self.message:
                     self.draw_message(self.message)
-                pygame.display.flip()
-                continue
-
-            # --- Pause state ---
-            if self.state == 'PAUSE':
-                # Draw current game scene without updates and overlay a pause indicator
-                self.screen.fill(COLOR_BG)
-                pygame.draw.rect(self.screen, COLOR_WALL, pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT), 4)
-                room = self.dungeon.get_room(self.current_room_index)
-                if room.cleared:
-                    door_width = 60
-                    door_thickness = 4
-                    if UP in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, 0, door_width, door_thickness))
-                    if DOWN in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, SCREEN_HEIGHT - door_thickness, door_width, door_thickness))
-                    if LEFT in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(0, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
-                    if RIGHT in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(SCREEN_WIDTH - door_thickness, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
-                # Draw all static entities (no updates)
-                for potion in self.potions:
-                    potion.draw(self.screen)
-                for upgrade in self.upgrades:
-                    upgrade.draw(self.screen)
-                for bomb in self.bombs:
-                    bomb.draw(self.screen)
-                for enemy in self.enemies:
-                    enemy.draw(self.screen)
-                self.player.draw(self.screen)
-                self.draw_ui()
-                # Overlay paused message
-                font = pygame.font.Font(None, 64)
-                pause_text = font.render("Paused", True, (255, 255, 255))
-                rect = pause_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
-                self.screen.blit(pause_text, rect)
                 pygame.display.flip()
                 continue
 
@@ -1465,12 +1037,6 @@ class Game:
         # Room text
         rtext = font.render(f"Room {self.current_room_index + 1} / {ROOM_COUNT}", True, (255, 255, 255))
         self.screen.blit(rtext, (bar_x, bar_y + bar_h + 28))
-        # Draw minimap in the upper right corner
-        self.draw_minimap()
-
-        # Gold display
-        gtext = font.render(f"Gold: {self.gold}", True, (255, 215, 0))
-        self.screen.blit(gtext, (bar_x, bar_y + bar_h + 52))
 
     def draw_message(self, text: str) -> None:
         """
@@ -1502,47 +1068,6 @@ class Game:
         message = f"{title}\nTime: {time_str}  Kills: {self.kills}"
         # Show for longer to allow players to read
         self.show_message(message, duration=6.0)
-
-    def draw_minimap(self) -> None:
-        """
-        Render a minimap showing the layout of the dungeon.  Visited rooms
-        appear brighter, unvisited rooms are dim, and the current room is
-        highlighted.  The minimap is drawn in the top right corner of the
-        screen and scales automatically based on the dungeon layout.
-        """
-        # Ensure layout positions are available
-        if not hasattr(self, 'map_positions'):
-            return
-        positions = self.map_positions
-        # Compute bounds
-        xs = [pos[0] for pos in positions.values()]
-        ys = [pos[1] for pos in positions.values()]
-        min_x, max_x = min(xs), max(xs)
-        min_y, max_y = min(ys), max(ys)
-        cols = max_x - min_x + 1
-        rows = max_y - min_y + 1
-        # Size per cell and map dimensions
-        cell = 12
-        map_width = cols * cell
-        map_height = rows * cell
-        # Base position (top right with margin)
-        base_x = SCREEN_WIDTH - map_width - 10
-        base_y = 10
-        # Colors
-        visited_color = (140, 220, 255)
-        unvisited_color = (60, 80, 100)
-        current_color = (255, 200, 50)
-        for index, (px, py) in positions.items():
-            x = base_x + (px - min_x) * cell
-            y = base_y + (py - min_y) * cell
-            rect = pygame.Rect(x + 1, y + 1, cell - 2, cell - 2)
-            if index == self.current_room_index:
-                color = current_color
-            elif index in getattr(self, 'visited_rooms', {}):
-                color = visited_color
-            else:
-                color = unvisited_color
-            pygame.draw.rect(self.screen, color, rect)
 
     # ------------------------------------------------------------------
     # High score and menu helpers
@@ -1623,18 +1148,6 @@ class Game:
         self.saved_score = False
         # Reset bombs
         self.bombs: List[Bomb] = []
-        # Compute minimap positions and initialise visited rooms
-        self.map_positions = self.dungeon.get_layout_positions()
-        self.visited_rooms: set[int] = {0}
-
-        # Initialise currency and environmental lists.  Gold tracks the
-        # player's current wealth.  Coins, barrels, traps and shop items are
-        # per‑room entities and reset on room load.
-        self.gold: int = 0
-        self.coins: List[Coin] = []
-        self.barrels: List[Barrel] = []
-        self.traps: List[SpikeTrap] = []
-        self.shop_items: List[ShopItem] = []
 
     def draw_menu(self) -> None:
         """Render the start menu with title and high score information."""

@@ -18,18 +18,20 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
 
   update(player) {
     if (!player) return;
-    const dir = new Phaser.Math.Vector2(player.x - this.x, player.y - this.y);
-    dir.normalize().scale(this.speed);
-    this.setVelocity(dir.x, dir.y);
+    // Move toward the player. Phaser's moveToObject calculates the
+    // velocity vector required to travel toward the target at the given
+    // speed. This ensures the enemy will chase the player smoothly.
+    this.scene.physics.moveToObject(this, player, this.speed);
 
     // Flip sprite horizontally based on x direction to face left or right
-    if (dir.x < 0) {
+    if (this.body.velocity.x < 0) {
       this.flipX = true;
-    } else if (dir.x > 0) {
+    } else if (this.body.velocity.x > 0) {
       this.flipX = false;
     }
 
-    // Play walking animation if not already playing
+    // Restart the walk animation if it has stopped. This prevents the
+    // enemy sprite from freezing on a single frame when chasing.
     if (!this.anims.isPlaying) {
       this.anims.play('enemy-walk');
     }

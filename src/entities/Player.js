@@ -27,6 +27,15 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
     // Keep track of the last facing direction for idle frames.
     this.lastDirection = 'down';
+
+    // Register a pointer event for firing. Instead of firing on a single
+    // pointerdown, we will check for pointer.isDown during update and
+    // respect a cooldown. Nonetheless we keep a reference to the pointer
+    // object here.
+    this.pointer = scene.input.activePointer;
+    // Store time of last fired bullet. This is separate from
+    // lastFiredAtMs so that update can throttle firing.
+    this.lastBulletTime = 0;
   }
 
   update(time) {
@@ -81,31 +90,32 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       }
     }
     // Shooting
-    // Use the mouse button for shooting. When the left mouse button
-    // is held down, fire a bullet in the direction the player is
-    // currently facing. This uses the lastDirection property set by
-    // movement logic above. The fire rate is governed by
-    // fireCooldownMs.
-    const pointer = this.scene.input.activePointer;
-    if (pointer.isDown && time - this.lastFiredAtMs > this.fireCooldownMs) {
-      this.lastFiredAtMs = time;
-      let dir;
-      switch (this.lastDirection) {
-        case 'up':
-          dir = new Phaser.Math.Vector2(0, -1);
-          break;
-        case 'left':
-          dir = new Phaser.Math.Vector2(-1, 0);
-          break;
-        case 'right':
-          dir = new Phaser.Math.Vector2(1, 0);
-          break;
-        case 'down':
-        default:
-          dir = new Phaser.Math.Vector2(0, 1);
-          break;
+    // Handle mouse firing with a cooldown. If the primary mouse button is
+    // held down (pointer.isDown) and enough time has elapsed since the
+    // last shot, spawn a bullet. This ensures bullets fire continuously
+    // while the button is held.
+    if (this.pointer.isDown) {
+      const now = this.scene.time.now;
+      if (now - this.lastBulletTime >= this.fireCooldownMs) {
+        let dir;
+        switch (this.lastDirection) {
+          case 'up':
+            dir = new Phaser.Math.Vector2(0, -1);
+            break;
+          case 'left':
+            dir = new Phaser.Math.Vector2(-1, 0);
+            break;
+          case 'right':
+            dir = new Phaser.Math.Vector2(1, 0);
+            break;
+          case 'down':
+          default:
+            dir = new Phaser.Math.Vector2(0, 1);
+            break;
+        }
+        this.fireBullet(dir);
+        this.lastBulletTime = now;
       }
-      this.fireBullet(dir);
     }
   }
 
@@ -113,7 +123,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     // Spawn the bullet slightly offset from the player so that it doesn’t
     // immediately collide with the player's body. The offset distance
     // corresponds to twice the player's sprite size (16px * scale).
-    const offset = 16 * 2; // 16px frame size * scale factor (2)
+    // We add a small extra offset equal to the bullet radius (4px) to
+    // guarantee that the bullet spawns outside the player's collider.
+    const offset = 16 * 2 + 4;
     const spawnX = this.x + direction.x * offset;
     const spawnY = this.y + direction.y * offset;
     const bullet = this.scene.physics.add.image(spawnX, spawnY, 'bullet');
@@ -122,7 +134,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     // physics body size to match half of the visual size for more accurate
     // collisions.
     bullet.setScale(1);
-    bullet.setCircle(4); // radius equals half of 8px bullet size
+    // Define a circular body with radius 4 at (0,0). Passing a second
+    // argument of 0 sets both the horizontal and vertical offset to 0.
+    bullet.setCircle(4, 0, 0);
     // Set velocity based on the provided direction. Bullets travel faster than player movement.
     bullet.setVelocity(direction.x * 360, direction.y * 360);
     bullet.lifespanMs = 700;

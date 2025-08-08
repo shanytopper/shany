@@ -88,6 +88,105 @@ BOMB_ICON_FILE: str = os.path.join(ASSETS_DIR, 'bomb.png')
 SKELETON_DIR: str = os.path.join(ASSETS_DIR, 'skeleton')
 MONSTER_DIR: str = os.path.join(ASSETS_DIR, 'monster')
 
+# -----------------------------------------------------------------------------
+# Procedural icon generation
+#
+# Some entities (barrels, traps, upgrades) previously appeared as coloured
+# rectangles.  To enhance visual clarity and adhere to a fantasy theme, we
+# generate simple pixel art icons at runtime using Pygame.  These helper
+# functions create small images representing common objects (barrels, spike
+# traps, swords, hearts, shields, boots, bullets) without the need for
+# external art assets.  Icons are created once during game initialisation
+# and stored on the respective classes.
+
+def create_barrel_icon(size: Tuple[int, int] = (28, 28)) -> pygame.Surface:
+    """Create a simple barrel icon with wood planks."""
+    w, h = size
+    surf = pygame.Surface((w, h), pygame.SRCALPHA)
+    # Base colour
+    surf.fill((135, 82, 52))  # brown
+    # Draw darker top and bottom rims
+    pygame.draw.rect(surf, (115, 62, 32), pygame.Rect(0, 0, w, h // 6))
+    pygame.draw.rect(surf, (115, 62, 32), pygame.Rect(0, h - h // 6, w, h // 6))
+    # Draw vertical bands
+    band_w = max(2, w // 8)
+    for i in range(1, 4):
+        x = i * (w // 4)
+        pygame.draw.rect(surf, (100, 50, 25), pygame.Rect(x - band_w // 2, 0, band_w, h))
+    return surf
+
+
+def create_spike_icon(size: Tuple[int, int] = (32, 32)) -> pygame.Surface:
+    """Create a simple spike trap icon using triangular spikes."""
+    w, h = size
+    surf = pygame.Surface((w, h), pygame.SRCALPHA)
+    # Draw base
+    surf.fill((60, 60, 60))
+    # Draw spikes (three triangles)
+    tri_w = w // 4
+    tri_h = h // 2
+    for i in range(3):
+        # Coordinates of triangle vertices
+        x0 = (i + 1) * (w // 4) - tri_w // 2
+        pygame.draw.polygon(surf, (200, 200, 200), [(x0, h - 2), (x0 + tri_w // 2, h - tri_h - 2), (x0 + tri_w, h - 2)])
+    return surf
+
+
+def create_upgrade_icons() -> Dict[str, pygame.Surface]:
+    """
+    Generate icons for each upgrade type.  Icons are 20x20 pixel art
+    representing power, rapid fire, speed, vitality, spread shot, shield and
+    bomb.  Returns a mapping from upgrade name to its corresponding surface.
+    """
+    icons: Dict[str, pygame.Surface] = {}
+    # Helper to draw a heart shape
+    def draw_heart(surf: pygame.Surface, color: Tuple[int, int, int]):
+        w, h = surf.get_size()
+        # two circles and a triangle
+        r = w // 4
+        pygame.draw.circle(surf, color, (r + 1, r), r)
+        pygame.draw.circle(surf, color, (w - r - 1, r), r)
+        pygame.draw.polygon(surf, color, [(1, r), (w - 1, r), (w // 2, h - 2)])
+
+    # Power Up: draw a sword
+    surf = pygame.Surface((20, 20), pygame.SRCALPHA)
+    # blade
+    pygame.draw.rect(surf, (180, 180, 200), pygame.Rect(9, 2, 2, 12))
+    # guard
+    pygame.draw.rect(surf, (120, 80, 40), pygame.Rect(6, 12, 8, 2))
+    # handle
+    pygame.draw.rect(surf, (100, 60, 30), pygame.Rect(9, 14, 2, 4))
+    icons['Power Up'] = surf
+    # Rapid Fire: draw a lightning bolt
+    surf = pygame.Surface((20, 20), pygame.SRCALPHA)
+    pygame.draw.polygon(surf, (255, 215, 0), [(6, 4), (12, 4), (9, 9), (14, 9), (8, 16), (11, 10), (5, 10)])
+    icons['Rapid Fire'] = surf
+    # Fleet Feet: draw boots
+    surf = pygame.Surface((20, 20), pygame.SRCALPHA)
+    pygame.draw.rect(surf, (150, 75, 0), pygame.Rect(4, 10, 5, 6))
+    pygame.draw.rect(surf, (150, 75, 0), pygame.Rect(11, 10, 5, 6))
+    pygame.draw.rect(surf, (100, 50, 0), pygame.Rect(4, 16, 5, 2))
+    pygame.draw.rect(surf, (100, 50, 0), pygame.Rect(11, 16, 5, 2))
+    icons['Fleet Feet'] = surf
+    # Vitality: draw heart
+    surf = pygame.Surface((20, 20), pygame.SRCALPHA)
+    draw_heart(surf, (200, 50, 70))
+    icons['Vitality'] = surf
+    # Spread Shot: draw three bullets
+    surf = pygame.Surface((20, 20), pygame.SRCALPHA)
+    for i, x in enumerate([6, 10, 14]):
+        pygame.draw.circle(surf, (255, 255, 0), (x, 10), 2)
+        pygame.draw.rect(surf, (255, 255, 0), pygame.Rect(x - 2, 10, 4, 6))
+    icons['Spread Shot'] = surf
+    # Shield: draw shield
+    surf = pygame.Surface((20, 20), pygame.SRCALPHA)
+    pygame.draw.polygon(surf, (100, 160, 220), [(10, 4), (16, 8), (16, 14), (10, 18), (4, 14), (4, 8)])
+    pygame.draw.polygon(surf, (60, 120, 180), [(10, 6), (14, 9), (14, 13), (10, 16), (6, 13), (6, 9)])
+    icons['Shield'] = surf
+    # Bomb: use the bomb icon loaded from file later (assigned in Game.__init__)
+    # We'll assign this in Game.__init__ once bomb image is loaded
+    return icons
+
 # Directory containing 8‑direction hero animations.  This folder
 # contains individual PNG files for the player's jump/walk animation
 # (eight frames for each cardinal direction).  The left direction is
@@ -960,11 +1059,18 @@ class Potion:
 
 class Upgrade:
     """Collectible upgrade that modifies a player attribute when picked up."""
+    # Mapping from upgrade names to their corresponding icon surfaces.
+    # This dictionary is populated during game initialisation by calling
+    # ``create_upgrade_icons``.  The 'Bomb' entry is assigned separately
+    # with the loaded bomb image.  If a name is not present, a simple
+    # coloured square will be drawn.
+    icons: Dict[str, pygame.Surface] = {}
+
     def __init__(self, name: str, effect, x: float, y: float) -> None:
         self.name = name
         self.effect = effect  # callable that takes a Player and applies the upgrade
         self.rect = pygame.Rect(x, y, 20, 20)
-        self.collected = False
+        self.collected: bool = False
 
     def apply(self, player: Player) -> None:
         """Apply the upgrade to the player and mark as collected."""
@@ -974,8 +1080,19 @@ class Upgrade:
             self.collected = True
 
     def draw(self, surface: pygame.Surface) -> None:
-        if not self.collected:
-            # simple blue square for upgrades
+        if self.collected:
+            return
+        # Try to fetch an icon for this upgrade
+        icon = Upgrade.icons.get(self.name)
+        if icon:
+            # Scale icon to rect size if necessary
+            if icon.get_size() != self.rect.size:
+                scaled = pygame.transform.smoothscale(icon, self.rect.size)
+            else:
+                scaled = icon
+            surface.blit(scaled, self.rect.topleft)
+        else:
+            # Fallback: draw a coloured rectangle (bluish tint)
             pygame.draw.rect(surface, (50, 150, 200), self.rect)
 
 
@@ -1032,9 +1149,27 @@ class Barrel:
         if self.health <= 0:
             self.alive = False
 
+    # Static image used to draw barrels.  Assigned during game initialisation.
+    image: Optional[pygame.Surface] = None
+
     def draw(self, surface: pygame.Surface) -> None:
-        if self.alive:
-            # Brownish colour for barrels
+        """Render the barrel.  If a custom image has been assigned
+        (via ``Barrel.image``), scale it to the barrel's rect and blit it.
+        Otherwise fall back to drawing a simple brown rectangle.  The
+        barrel is only drawn when alive.
+        """
+        if not self.alive:
+            return
+        img = getattr(Barrel, 'image', None)
+        if img:
+            # Scale the icon to fit the barrel's rectangle
+            if img.get_size() != self.rect.size:
+                scaled = pygame.transform.smoothscale(img, self.rect.size)
+            else:
+                scaled = img
+            surface.blit(scaled, self.rect.topleft)
+        else:
+            # Fallback: simple brown rectangle
             pygame.draw.rect(surface, (150, 100, 50), self.rect)
 
 
@@ -1086,10 +1221,35 @@ class SpikeTrap:
         cycle = self.timer_ms % period
         self.active = cycle < SPIKE_ACTIVE_MS
 
+    # Static icon used to draw traps.  Created during game initialisation.
+    image: Optional[pygame.Surface] = None
+
     def draw(self, surface: pygame.Surface) -> None:
-        # Colour indicates state: bright red for active, dark grey when inactive
-        color = (200, 50, 50) if self.active else (80, 80, 80)
-        pygame.draw.rect(surface, color, self.rect)
+        """Render the spike trap.  If a custom icon has been assigned
+        (via ``SpikeTrap.image``), blit it.  When the trap is active, the
+        icon is tinted red to indicate danger.  Otherwise a dark grey tint
+        is applied.  If no icon is available, draw a coloured rectangle as
+        fallback.
+        """
+        img = getattr(SpikeTrap, 'image', None)
+        if img:
+            # Tint the base icon based on active state
+            base = img
+            # Create a tinted copy
+            surf = base.copy()
+            tint = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
+            # Choose tint colour: red when active, dark grey when inactive
+            tint_color = (220, 50, 50) if self.active else (80, 80, 80)
+            tint.fill(tint_color)
+            surf.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            # Scale to rect if necessary
+            if surf.get_size() != self.rect.size:
+                surf = pygame.transform.smoothscale(surf, self.rect.size)
+            surface.blit(surf, self.rect.topleft)
+        else:
+            # Fallback: simple rectangle with colour indicating state
+            color = (200, 50, 50) if self.active else (80, 80, 80)
+            pygame.draw.rect(surface, color, self.rect)
 
 
 class ShopItem:
@@ -1102,6 +1262,10 @@ class ShopItem:
         self.price = price
         self.rect = pygame.Rect(x, y, 24, 24)
         self.purchased: bool = False
+        # Assign icon based on upgrade name if available.  Shop items share
+        # the same icons as upgrades.  If not found, ``icon`` remains None
+        # and a coloured rectangle will be drawn instead.
+        self.icon: Optional[pygame.Surface] = Upgrade.icons.get(name)
 
     def apply(self, player: Player) -> None:
         """Apply the item's effect to the player and mark as purchased."""
@@ -1111,9 +1275,18 @@ class ShopItem:
             self.purchased = True
 
     def draw(self, surface: pygame.Surface) -> None:
-        # Grey out purchased items
-        color = (40, 100, 160) if not self.purchased else (100, 100, 100)
-        pygame.draw.rect(surface, color, self.rect)
+        if self.icon and not self.purchased:
+            # Draw the item's icon centred in its rect
+            icon = self.icon
+            if icon.get_size() != self.rect.size:
+                icon = pygame.transform.smoothscale(icon, self.rect.size)
+            surface.blit(icon, self.rect.topleft)
+            # Optionally overlay a semi‑transparent tint if desired to
+            # distinguish shop items; skip for clarity.
+        else:
+            # Simple coloured rectangle: blue for available, grey for purchased
+            color = (40, 100, 160) if not self.purchased else (100, 100, 100)
+            pygame.draw.rect(surface, color, self.rect)
 
 
 class BossEnemy(Enemy):
@@ -1233,6 +1406,19 @@ class Game:
         Potion.image = self.potion_images[0]
         Coin.frames = self.coin_frames
         Bomb.image = self.bomb_image
+
+        # Create and assign icons for environment objects and upgrades.  These
+        # are generated procedurally to enhance clarity while maintaining
+        # a cohesive fantasy theme.  Assign them to static class attributes.
+        # Barrel and spike trap icons
+        Barrel.image = create_barrel_icon()
+        SpikeTrap.image = create_spike_icon()
+        # Generate upgrade icons and assign to the Upgrade class.  This
+        # dictionary maps upgrade names to their respective icons.  The
+        # bomb icon is assigned separately using the loaded bomb image.
+        Upgrade.icons = create_upgrade_icons()
+        # Add Bomb icon by scaling the bomb image to the standard upgrade size
+        Upgrade.icons['Bomb'] = pygame.transform.smoothscale(self.bomb_image, (20, 20))
         # High score data: {"best_time": int or None, "best_kills": int or None}
         self.highscore: Dict[str, Optional[int]] = self.load_highscore()
         # State machine: 'MENU', 'GAME', 'GAME_OVER'
@@ -1647,14 +1833,28 @@ class Game:
                             self.player.rect.right = self.player.rect.width + 2
                             self.load_room(room.neighbors[RIGHT])
                     # Check victory / defeat
-                    if all(r.cleared for r in self.dungeon.rooms) and not self.game_over:
-                        self.game_over = True
-                        self.display_game_over_message(victory=True)
-                        self.state = 'GAME_OVER'
-                    if self.player.health <= 0 and not self.game_over:
-                        self.game_over = True
-                        self.display_game_over_message(victory=False)
-                        self.state = 'GAME_OVER'
+                    # Check victory / defeat.  Immediately return to the
+                    # menu when the run ends.  Compute elapsed time and
+                    # update highscore before resetting.  This replaces the
+                    # previous behaviour where the player had to press a key
+                    # to exit the game over screen.
+                    if not self.game_over:
+                        if all(r.cleared for r in self.dungeon.rooms):
+                            # Victory: update high score and return to menu
+                            elapsed_ms = pygame.time.get_ticks() - self.start_time
+                            self.save_highscore(elapsed_ms, self.kills)
+                            # Reset run and show menu
+                            self.reset_game()
+                            self.state = 'MENU'
+                            # Skip further updates in this loop iteration
+                            continue
+                        if self.player.health <= 0:
+                            # Defeat: update kills high score and return to menu
+                            elapsed_ms = pygame.time.get_ticks() - self.start_time
+                            self.save_highscore(elapsed_ms, self.kills)
+                            self.reset_game()
+                            self.state = 'MENU'
+                            continue
                 # Draw gameplay scene
                 self.screen.fill(COLOR_BG)
                 pygame.draw.rect(self.screen, COLOR_WALL, pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT), 4)

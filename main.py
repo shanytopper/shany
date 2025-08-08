@@ -70,15 +70,22 @@ COLOR_HEALTH_FG_BAD = (170, 0, 0)
 COLOR_POTION = (0, 255, 136)
 
 # Paths to external sprite assets.  All art is stored in the ``assets``
-# folder adjacent to this file.  These include spritesheets for enemies
-# and small icons for potions, coins and bombs.  The assets are all
-# distributed under permissive licences (CC‑BY or CC0) and credited
-# accordingly.  See the README for attribution details.
+# folder adjacent to this file.  These include sprite sheets for enemies,
+# small icons for potions/coins/bombs, and a high‑quality 8‑direction
+# animation for the player.  The assets are all distributed under
+# permissive licences (CC‑BY or CC0) and credited accordingly.  See the
+# README for attribution details.
 ASSETS_DIR: str = os.path.join(os.path.dirname(__file__), 'assets')
 SLIME_SHEET_FILE: str = os.path.join(ASSETS_DIR, 'slime_spritesheet.png')
 POTION_SET_FILE: str = os.path.join(ASSETS_DIR, 'potion_set_16x16.png')
 COIN_STRIP_FILE: str = os.path.join(ASSETS_DIR, 'coin_strip.png')
 BOMB_ICON_FILE: str = os.path.join(ASSETS_DIR, 'bomb.png')
+
+# Directory containing 8‑direction hero animations.  This folder
+# contains individual PNG files for the player's jump/walk animation
+# (eight frames for each cardinal direction).  The left direction is
+# derived by flipping the right frames horizontally.
+HERO_DIR: str = os.path.join(ASSETS_DIR, 'hero')
 
 # Cooldowns and durations (ms)
 DASH_COOLDOWN_MS: int = 600
@@ -261,6 +268,51 @@ def load_coin_frames(path: str) -> List[pygame.Surface]:
     for col in range(cols):
         rect = pygame.Rect(col * frame_width, 0, frame_width, frame_height)
         frames.append(sheet.subsurface(rect))
+    return frames
+
+
+def load_hero_frames(dir_path: str) -> Dict[int, List[pygame.Surface]]:
+    """
+    Load a series of PNG images from ``dir_path`` corresponding to the
+    player's movement animations.  The files should follow the naming
+    pattern ``jump_direction (n).png`` where ``direction`` is one of
+    ``up``, ``down`` or ``right`` and ``n`` is a 1‑based index.  The
+    returned mapping uses the global direction constants (UP, DOWN, LEFT,
+    RIGHT) as keys and lists of Pygame surfaces as values.  For the left
+    direction we mirror the right frames horizontally.  If no frames are
+    found for a direction, an empty list is returned for that key.
+    """
+    frames: Dict[int, List[pygame.Surface]] = {UP: [], DOWN: [], LEFT: [], RIGHT: []}
+    # Because filenames contain spaces and parentheses, we'll list
+    # directory contents and filter manually
+    try:
+        filenames = sorted(os.listdir(dir_path))
+    except FileNotFoundError:
+        return frames
+    # Organise files by direction prefix
+    temp: Dict[str, List[str]] = {'up': [], 'down': [], 'right': []}
+    for fname in filenames:
+        if fname.startswith('jump_up'):
+            temp['up'].append(fname)
+        elif fname.startswith('jump_down'):
+            temp['down'].append(fname)
+        elif fname.startswith('jump_right'):
+            temp['right'].append(fname)
+    # Sort by natural order (assuming format "(n)")
+    import re
+    def sort_key(name: str) -> int:
+        m = re.search(r'\((\d+)\)', name)
+        return int(m.group(1)) if m else 0
+    for key in temp:
+        temp[key].sort(key=sort_key)
+    # Load frames for up, down, right
+    for dname, dir_constant in [('up', UP), ('down', DOWN), ('right', RIGHT)]:
+        for fname in temp[dname]:
+            path = os.path.join(dir_path, fname)
+            img = pygame.image.load(path).convert_alpha()
+            frames[dir_constant].append(img)
+    # Create left frames by flipping right frames
+    frames[LEFT] = [pygame.transform.flip(img, True, False) for img in frames[RIGHT]]
     return frames
 
 
@@ -620,9 +672,19 @@ class Player(Entity):
                 self.invulnerable = False
 
     def draw(self, surface: pygame.Surface) -> None:
-        # Draw player sprite
-        frame = self.frames[self.last_direction][self.frame_index]
-        surface.blit(frame, self.rect.topleft)
+        # Draw player sprite.  If frames are available, scale to the
+        # player rectangle size.  Otherwise draw a fallback rectangle.
+        if self.frames and self.frames.get(self.last_direction):
+            # Use modulo to avoid index errors if frame list shorter than expected
+            frames_for_dir = self.frames[self.last_direction]
+            frame = frames_for_dir[self.frame_index % len(frames_for_dir)]
+            # Scale frame to match the player's rectangle
+            if frame.get_size() != self.rect.size:
+                frame = pygame.transform.scale(frame, self.rect.size)
+            surface.blit(frame, self.rect.topleft)
+        else:
+            # Fallback: draw a white rectangle
+            pygame.draw.rect(surface, (220, 220, 220), self.rect)
         # Draw bullets
         for bullet in self.bullets:
             bullet.draw(surface)
@@ -1122,8 +1184,17 @@ class Game:
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Rogue‑Lite POC")
         self.clock = pygame.time.Clock()
-        # Load hero frames once; this asset is reused across runs
-        self.player_frames = self.load_hero_frames(os.path.join(os.path.dirname(__file__), 'hero.png'))
+        # Load hero frames once; this asset is reused across runs.  Use the
+        # high‑quality 8‑direction hero animations stored in HERO_DIR.  If
+        # HERO_DIR does not contain any frames, the returned mapping will be
+        # empty and fallback drawing will occur (the player will appear as
+        # a coloured rectangle).
+        self.player_frames = load_hero_frames(HERO_DIR)
+        # Fallback: if no frames were loaded from HERO_DIR, fall back to the
+        # original hero spritesheet (hero.png).  This ensures the game
+        # remains playable even if the external hero assets are missing.
+        if not any(self.player_frames.values()):
+            self.player_frames = self.load_hero_frames(os.path.join(os.path.dirname(__file__), 'hero.png'))
         # Load enemy and item sprite frames.  These functions must be called
         # after ``pygame.init()`` so that Pygame surfaces are initialised.
         # Enemy frames: dictionary mapping colour names to a list of walking frames.

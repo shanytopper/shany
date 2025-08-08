@@ -69,6 +69,17 @@ COLOR_HEALTH_FG_WARN = (204, 204, 0)
 COLOR_HEALTH_FG_BAD = (170, 0, 0)
 COLOR_POTION = (0, 255, 136)
 
+# Paths to external sprite assets.  All art is stored in the ``assets``
+# folder adjacent to this file.  These include spritesheets for enemies
+# and small icons for potions, coins and bombs.  The assets are all
+# distributed under permissive licences (CC‑BY or CC0) and credited
+# accordingly.  See the README for attribution details.
+ASSETS_DIR: str = os.path.join(os.path.dirname(__file__), 'assets')
+SLIME_SHEET_FILE: str = os.path.join(ASSETS_DIR, 'slime_spritesheet.png')
+POTION_SET_FILE: str = os.path.join(ASSETS_DIR, 'potion_set_16x16.png')
+COIN_STRIP_FILE: str = os.path.join(ASSETS_DIR, 'coin_strip.png')
+BOMB_ICON_FILE: str = os.path.join(ASSETS_DIR, 'bomb.png')
+
 # Cooldowns and durations (ms)
 DASH_COOLDOWN_MS: int = 600
 DASH_DURATION_MS: int = 150
@@ -174,6 +185,85 @@ UPGRADE_TYPES = {
 }
 
 
+# -----------------------------------------------------------------------------
+# Asset loading helpers
+#
+# These functions encapsulate loading and slicing of external sprite assets.
+# They must be called after ``pygame.init()`` so that surfaces are created
+# correctly.  ``Game`` invokes these functions during initialisation and
+# stores the results for use by enemy and item classes.  Splitting the
+# spritesheets here isolates file handling and keeps the rest of the code
+# clean.
+
+def load_slime_frames(path: str) -> Dict[str, List[pygame.Surface]]:
+    """Load the Calciumtrice slime sprite sheet and return walking frames.
+
+    The sheet is arranged as a 320x640 image with 10 columns and 20 rows of
+    32x32 pixel frames.  There are four colour variants (green, blue, red,
+    yellow) with five animations each.  We extract the third row (index 2)
+    of each colour variant which represents the walk animation.  The returned
+    dictionary maps colour names to a list of Pygame surfaces.
+    """
+    sheet = pygame.image.load(path).convert_alpha()
+    frame_width, frame_height = 32, 32
+    cols = sheet.get_width() // frame_width
+    rows = sheet.get_height() // frame_height
+    # Precompute all rows
+    all_rows: List[List[pygame.Surface]] = []
+    for row in range(rows):
+        row_frames: List[pygame.Surface] = []
+        for col in range(cols):
+            rect = pygame.Rect(col * frame_width, row * frame_height, frame_width, frame_height)
+            frame = sheet.subsurface(rect)
+            row_frames.append(frame)
+        all_rows.append(row_frames)
+    # Map colours to their walk animation row indices
+    colour_rows = {
+        'green': 2,
+        'blue': 7,
+        'red': 12,
+        'yellow': 17,
+    }
+    slime_frames: Dict[str, List[pygame.Surface]] = {}
+    for colour, row_idx in colour_rows.items():
+        if row_idx < len(all_rows):
+            slime_frames[colour] = all_rows[row_idx]
+    return slime_frames
+
+
+def load_potion_images(path: str) -> List[pygame.Surface]:
+    """Load the 16x16 potion set and return a list of potion images.
+
+    The potion set contains four coloured potions arranged horizontally.
+    Each potion is 16x16 pixels.  Returns a list of four surfaces.
+    """
+    sheet = pygame.image.load(path).convert_alpha()
+    potions: List[pygame.Surface] = []
+    frame_width, frame_height = 16, 16
+    cols = sheet.get_width() // frame_width
+    for col in range(cols):
+        rect = pygame.Rect(col * frame_width, 0, frame_width, frame_height)
+        potions.append(sheet.subsurface(rect))
+    return potions
+
+
+def load_coin_frames(path: str) -> List[pygame.Surface]:
+    """Load the coin animation strip (12 frames) and return the frames.
+
+    The coin spritesheet is a horizontal strip of 12 frames, each 16x16 pixels.
+    Coins can animate by cycling through these frames.  Returns a list of
+    surfaces.
+    """
+    sheet = pygame.image.load(path).convert_alpha()
+    frame_width, frame_height = 16, 16
+    cols = sheet.get_width() // frame_width
+    frames: List[pygame.Surface] = []
+    for col in range(cols):
+        rect = pygame.Rect(col * frame_width, 0, frame_width, frame_height)
+        frames.append(sheet.subsurface(rect))
+    return frames
+
+
 
 # -----------------------------------------------------------------------------
 # Utility functions
@@ -272,28 +362,28 @@ class Dungeon:
             self._connect_rooms(i, j, [UP, DOWN, LEFT, RIGHT])
 
     def _connect_rooms(self, i: int, target: int, dirs: List[int]) -> None:
-        """Connect room i with room `target` if possible using a free direction."""
-        available = dirs.copy()
-        random.shuffle(available)
-        for d in available:
-            if d in self.rooms[target].neighbors:
-                continue
-            opp = opposite_direction(d)
-            if opp in self.rooms[i].neighbors:
-                continue
-            # connect target -> i
-            self.rooms[target].neighbors[d] = i
-            self.rooms[i].neighbors[opp] = target
-            return
-        # If no direction was free on either room, force a connection by overwriting an unused direction.
-        for d in dirs:
-            if d not in self.rooms[target].neighbors:
-                opp = opposite_direction(d)
-                # remove any existing connection on this side
-                # but we don't remove opposite's previous neighbor to avoid breaking existing graph
-                self.rooms[target].neighbors[d] = i
+        """
+        Attempt to connect room ``i`` with room ``target`` using a free direction on
+        both ends.  The connection is only created if both rooms have at least one
+        available direction.  If no such pair of directions exists, this
+        method does nothing.  This conservative approach avoids overriding
+        existing connections, which could break the main chain and result in
+        unreachable rooms.
+        """
+        # build lists of free directions for each room
+        free_i = [d for d in dirs if d not in self.rooms[i].neighbors]
+        free_t = [d for d in dirs if d not in self.rooms[target].neighbors]
+        random.shuffle(free_i)
+        random.shuffle(free_t)
+        for d_t in free_t:
+            opp = opposite_direction(d_t)
+            if opp in free_i:
+                # connect target -> i via d_t and i -> target via opp
+                self.rooms[target].neighbors[d_t] = i
                 self.rooms[i].neighbors[opp] = target
                 return
+        # If we reach here no mutual free directions were found; skip creating a loop
+        return
 
     def get_room(self, index: int) -> Room:
         return self.rooms[index]
@@ -427,20 +517,16 @@ class Player(Entity):
             # reset animation
             self.frame_index = 0
             self.animation_time = 0.0
-        # Shooting
-        now = pygame.time.get_ticks()
-        if keys[pygame.K_SPACE]:
-            # Use player's personal fire rate when deciding if a new bullet can be fired
-            if now - self.last_shot_time >= self.fire_rate_ms:
-                self.last_shot_time = now
-                direction = self.last_direction
-                self.shoot(direction)
+        # Shooting with keyboard has been removed; shooting is now handled
+        # externally via mouse events in the Game loop.  ``Player.shoot_at_target``
+        # will be invoked by the game when the left mouse button is pressed.
 
         # Dash (shift) mechanics
         if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
-            # Initiate dash if cooldown elapsed
-            if now - self.last_dash_time >= DASH_COOLDOWN_MS and self.dash_time_remaining <= 0:
-                self.last_dash_time = now
+            # Get current time in milliseconds and initiate dash if cooldown has elapsed
+            now_ticks = pygame.time.get_ticks()
+            if now_ticks - self.last_dash_time >= DASH_COOLDOWN_MS and self.dash_time_remaining <= 0:
+                self.last_dash_time = now_ticks
                 self.dash_time_remaining = DASH_DURATION_MS
                 self.invulnerable = True
 
@@ -471,6 +557,45 @@ class Player(Entity):
             angle_rad = math.radians(angle_deg)
             vx = math.cos(angle_rad) * BULLET_SPEED
             vy = math.sin(angle_rad) * BULLET_SPEED
+            bullet = Bullet(cx, cy, vx, vy)
+            bullet.damage = self.bullet_damage
+            self.bullets.append(bullet)
+
+    def shoot_at_target(self, target_pos: Tuple[int, int]) -> None:
+        """
+        Fire bullets toward a specific position (typically the mouse cursor).
+        This method uses the player's ``bullet_count`` and ``bullet_damage``
+        stats to produce a spread of bullets centred on the angle from the
+        player to ``target_pos``.  The spread between bullets is fixed at
+        15 degrees.  The player's ``last_direction`` is updated to reflect
+        the general facing direction for animation purposes.
+        """
+        cx = self.rect.centerx
+        cy = self.rect.centery
+        dx = target_pos[0] - cx
+        dy = target_pos[1] - cy
+        # Do not fire if target is at the same position
+        if dx == 0 and dy == 0:
+            return
+        # Determine base angle in radians
+        base_angle = math.atan2(dy, dx)
+        # Update last_direction for sprite orientation
+        if abs(dx) > abs(dy):
+            self.last_direction = RIGHT if dx > 0 else LEFT
+        else:
+            self.last_direction = DOWN if dy > 0 else UP
+        # Spread angle (radians)
+        spread_rad = math.radians(15.0)
+        total_spread = spread_rad * (self.bullet_count - 1)
+        # Use player's fire rate to throttle shooting
+        now = pygame.time.get_ticks()
+        if now - self.last_shot_time < self.fire_rate_ms:
+            return
+        self.last_shot_time = now
+        for i in range(self.bullet_count):
+            angle = base_angle - total_spread / 2 + i * spread_rad
+            vx = math.cos(angle) * BULLET_SPEED
+            vy = math.sin(angle) * BULLET_SPEED
             bullet = Bullet(cx, cy, vx, vy)
             bullet.damage = self.bullet_damage
             self.bullets.append(bullet)
@@ -541,6 +666,15 @@ class Enemy(Entity):
     def __init__(self, x: float, y: float) -> None:
         super().__init__(x, y, 32, 32, ENEMY_MAX_HEALTH)
         self.speed = ENEMY_SPEED
+        # Animation fields.  ``anim_frames`` will be set externally by the
+        # Game when spawning enemies.  When populated, the enemy will cycle
+        # through the frames at ``anim_rate`` seconds per frame.  ``frame_index``
+        # tracks the current frame and ``anim_timer`` accumulates time between
+        # frame advances.
+        self.anim_frames: Optional[List[pygame.Surface]] = None
+        self.frame_index: int = 0
+        self.anim_timer: float = 0.0
+        self.anim_rate: float = 0.14  # seconds per frame
 
     def update(self, dt: float, player: Player) -> None:
         if not self.alive:
@@ -553,11 +687,25 @@ class Enemy(Entity):
             self.vel.x = (dx / dist) * self.speed
             self.vel.y = (dy / dist) * self.speed
         super().update(dt)
+        # Advance animation if frames are set
+        if self.anim_frames:
+            self.anim_timer += dt
+            if self.anim_timer >= self.anim_rate:
+                self.anim_timer -= self.anim_rate
+                self.frame_index = (self.frame_index + 1) % len(self.anim_frames)
         # Constrain
         self.rect.clamp_ip(pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT))
 
     def draw(self, surface: pygame.Surface) -> None:
-        pygame.draw.rect(surface, COLOR_ENEMY, self.rect)
+        if self.anim_frames:
+            # Draw animated sprite.  Ensure the surface size matches the rect
+            frame = self.anim_frames[self.frame_index]
+            if frame.get_size() != self.rect.size:
+                frame = pygame.transform.scale(frame, self.rect.size)
+            surface.blit(frame, self.rect.topleft)
+        else:
+            # Fallback: draw a coloured rectangle
+            pygame.draw.rect(surface, COLOR_ENEMY, self.rect)
 
 
 class RangedEnemy(Enemy):
@@ -594,21 +742,25 @@ class RangedEnemy(Enemy):
         self.bullets = [b for b in self.bullets if b.alive]
 
     def draw(self, surface: pygame.Surface) -> None:
-        # draw body
-        pygame.draw.rect(surface, (100, 40, 140), self.rect)
-        # draw bullets
+        # Draw the enemy body (animated if frames assigned)
+        super().draw(surface)
+        # Draw bullets fired by this enemy
         for b in self.bullets:
             b.draw(surface)
 
 
-class TurretEnemy(Entity):
+class TurretEnemy(Enemy):
     """Enemy that remains stationary but fires bullets in multiple directions."""
     def __init__(self, x: float, y: float) -> None:
-        super().__init__(x, y, 32, 32, ENEMY_MAX_HEALTH)
-        # Turret does not move
+        # Initialise as a standard enemy but with its own cooldown and no movement
+        super().__init__(x, y)
+        # Turret does not move towards the player
+        self.speed = 0.0
+        # Shooting parameters
         self.cooldown_ms: int = 1200
         self.last_shot_time: float = 0.0
         self.bullets: List[EnemyBullet] = []
+        # Default colour used if no animation frames are assigned
         self.color = (200, 120, 40)
 
     def update(self, dt: float, player: Player) -> None:
@@ -628,7 +780,15 @@ class TurretEnemy(Entity):
         self.bullets = [b for b in self.bullets if b.alive]
 
     def draw(self, surface: pygame.Surface) -> None:
-        pygame.draw.rect(surface, self.color, self.rect)
+        # Draw animated sprite if frames assigned; otherwise coloured rectangle
+        if hasattr(self, 'anim_frames') and self.anim_frames:
+            frame = self.anim_frames[self.frame_index]
+            if frame.get_size() != self.rect.size:
+                frame = pygame.transform.scale(frame, self.rect.size)
+            surface.blit(frame, self.rect.topleft)
+        else:
+            pygame.draw.rect(surface, getattr(self, 'color', COLOR_ENEMY), self.rect)
+        # Draw bullets
         for b in self.bullets:
             b.draw(surface)
 
@@ -645,8 +805,8 @@ class MiniEnemy(Enemy):
         self.speed = MINI_ENEMY_SPEED
 
     def draw(self, surface: pygame.Surface) -> None:
-        # Distinguish mini enemies by colour
-        pygame.draw.rect(surface, (120, 200, 80), self.rect)
+        # Draw mini enemy using scaled animation frames if present, otherwise coloured rect
+        super().draw(surface)
 
 
 class SplitterEnemy(Enemy):
@@ -657,7 +817,8 @@ class SplitterEnemy(Enemy):
         self.color = (180, 120, 40)
 
     def draw(self, surface: pygame.Surface) -> None:
-        pygame.draw.rect(surface, self.color, self.rect)
+        # Draw splitter enemy using animated sprite if available, otherwise fallback colour
+        super().draw(surface)
 
     def split(self) -> List[MiniEnemy]:
         """
@@ -711,8 +872,21 @@ class Potion:
         self.collected = False
 
     def draw(self, surface: pygame.Surface) -> None:
+        """
+        Render the potion if it hasn't been collected.  If a static image
+        has been assigned (``Potion.image``), blit it scaled to the
+        potion's rectangle.  Otherwise draw a coloured rectangle.
+        """
         if not self.collected:
-            pygame.draw.rect(surface, COLOR_POTION, self.rect)
+            image = getattr(Potion, 'image', None)
+            if image:
+                # scale image to potion size if necessary
+                img = image
+                if img.get_size() != self.rect.size:
+                    img = pygame.transform.scale(img, self.rect.size)
+                surface.blit(img, self.rect.topleft)
+            else:
+                pygame.draw.rect(surface, COLOR_POTION, self.rect)
 
 
 class Upgrade:
@@ -752,10 +926,21 @@ class Bomb:
                 self.alive = False
 
     def draw(self, surface: pygame.Surface) -> None:
-        # Draw a simple bomb as a grey circle; if exploded, draw nothing (explosion
-        # effect handled elsewhere)
+        """
+        Render the bomb on screen.  If a custom bomb image has been assigned
+        (via ``Bomb.image``), it is drawn centred on the bomb's position.
+        Otherwise a simple grey circle is used.  Exploded bombs are not
+        drawn.
+        """
         if not self.exploded:
-            pygame.draw.circle(surface, (100, 100, 100), (int(self.pos.x), int(self.pos.y)), 6)
+            # Try to use the assigned bomb image
+            image = getattr(Bomb, 'image', None)
+            if image:
+                rect = image.get_rect(center=(int(self.pos.x), int(self.pos.y)))
+                surface.blit(image, rect.topleft)
+            else:
+                # Fallback: draw a circle
+                pygame.draw.circle(surface, (100, 100, 100), (int(self.pos.x), int(self.pos.y)), 6)
 
 
 class Barrel:
@@ -793,9 +978,23 @@ class Coin:
         self.collected: bool = False
 
     def draw(self, surface: pygame.Surface) -> None:
+        """
+        Render the coin if it hasn't been collected.  Coins animate by
+        cycling through a list of frames assigned to ``Coin.frames``.
+        If no frames are available, draw a simple golden circle.
+        """
         if not self.collected:
-            # Draw a gold coin as a small circle
-            pygame.draw.circle(surface, (255, 215, 0), (self.rect.centerx, self.rect.centery), 7)
+            frames = getattr(Coin, 'frames', None)
+            if frames:
+                # Determine which frame to display based on the current time
+                index = (pygame.time.get_ticks() // 100) % len(frames)
+                frame = frames[index]
+                # Scale the frame to the coin's rectangle
+                if frame.get_size() != self.rect.size:
+                    frame = pygame.transform.scale(frame, self.rect.size)
+                surface.blit(frame, self.rect.topleft)
+            else:
+                pygame.draw.circle(surface, (255, 215, 0), (self.rect.centerx, self.rect.centery), self.rect.width // 2)
 
 
 class SpikeTrap:
@@ -925,10 +1124,36 @@ class Game:
         self.clock = pygame.time.Clock()
         # Load hero frames once; this asset is reused across runs
         self.player_frames = self.load_hero_frames(os.path.join(os.path.dirname(__file__), 'hero.png'))
+        # Load enemy and item sprite frames.  These functions must be called
+        # after ``pygame.init()`` so that Pygame surfaces are initialised.
+        # Enemy frames: dictionary mapping colour names to a list of walking frames.
+        self.slime_frames: Dict[str, List[pygame.Surface]] = load_slime_frames(SLIME_SHEET_FILE)
+        # Potion images (four coloured potions).  We'll use the first potion by
+        # default, but the list allows variation in the future.
+        self.potion_images: List[pygame.Surface] = load_potion_images(POTION_SET_FILE)
+        # Coin animation frames (twelve frames).  Coins will cycle through
+        # these frames to create a spinning effect.
+        self.coin_frames: List[pygame.Surface] = load_coin_frames(COIN_STRIP_FILE)
+        # Bomb icon for planted bombs.  A static 16x16 image.
+        try:
+            self.bomb_image: pygame.Surface = pygame.image.load(BOMB_ICON_FILE).convert_alpha()
+        except Exception:
+            # Fallback: simple surface if image missing
+            self.bomb_image = pygame.Surface((16, 16), pygame.SRCALPHA)
+            self.bomb_image.fill((120, 120, 120))
+        # Assign static images to item classes so they can draw themselves
+        # without needing a reference to the Game instance.  Classes check for
+        # these attributes at draw time.
+        Potion.image = self.potion_images[0]
+        Coin.frames = self.coin_frames
+        Bomb.image = self.bomb_image
         # High score data: {"best_time": int or None, "best_kills": int or None}
         self.highscore: Dict[str, Optional[int]] = self.load_highscore()
         # State machine: 'MENU', 'GAME', 'GAME_OVER'
         self.state: str = 'MENU'
+        # Mouse shooting flag.  When true, the player will continuously
+        # fire bullets toward the cursor while the left mouse button is held.
+        self.left_mouse_down: bool = False
         # Keep track of whether high score has been updated this run (to avoid
         # repeatedly writing the file during the game over loop)
         self.saved_score: bool = False
@@ -999,15 +1224,25 @@ class Game:
                 # Spawn Splitter, Teleporter, Turret, Ranged or Melee enemies based on probabilities.
                 # Remaining probability spawns a normal melee enemy.
                 if r < SPLITTER_PROBABILITY:
-                    self.enemies.append(SplitterEnemy(x, y))
+                    enemy = SplitterEnemy(x, y)
+                    self.assign_enemy_sprite(enemy)
+                    self.enemies.append(enemy)
                 elif r < SPLITTER_PROBABILITY + TELEPORTER_PROBABILITY:
-                    self.enemies.append(TeleporterEnemy(x, y))
+                    enemy = TeleporterEnemy(x, y)
+                    self.assign_enemy_sprite(enemy)
+                    self.enemies.append(enemy)
                 elif r < SPLITTER_PROBABILITY + TELEPORTER_PROBABILITY + TURRET_PROBABILITY:
-                    self.enemies.append(TurretEnemy(x, y))
+                    enemy = TurretEnemy(x, y)
+                    self.assign_enemy_sprite(enemy)
+                    self.enemies.append(enemy)
                 elif r < SPLITTER_PROBABILITY + TELEPORTER_PROBABILITY + TURRET_PROBABILITY + 0.25:
-                    self.enemies.append(RangedEnemy(x, y))
+                    enemy = RangedEnemy(x, y)
+                    self.assign_enemy_sprite(enemy)
+                    self.enemies.append(enemy)
                 else:
-                    self.enemies.append(Enemy(x, y))
+                    enemy = Enemy(x, y)
+                    self.assign_enemy_sprite(enemy)
+                    self.enemies.append(enemy)
         # Spawn potion
         if room.has_potion:
             x = rand_int(60, SCREEN_WIDTH - 60)
@@ -1070,6 +1305,17 @@ class Game:
                                 item.apply(self.player)
                                 self.gold -= item.price
                                 self.show_message(f"Purchased {item.name}!", duration=2.5)
+
+                # Handle mouse button events for shooting
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    # Start shooting when left mouse button is pressed
+                    if self.state == 'GAME' and not self.game_over:
+                        self.left_mouse_down = True
+                        # Immediate shot when pressed
+                        self.player.shoot_at_target(pygame.mouse.get_pos())
+                if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    # Stop shooting when left mouse button is released
+                    self.left_mouse_down = False
             keys = pygame.key.get_pressed()
 
             # --- Menu state ---
@@ -1087,9 +1333,12 @@ class Game:
                 if not self.game_over:
                     # Track whether there were any enemies at the start of this update
                     had_enemies = len(self.enemies) > 0
-                    # Update player
+                    # Update player movement and dash
                     self.player.handle_input(keys, dt)
                     self.player.update(dt)
+                    # Shoot continuously toward the mouse if the left button is held
+                    if self.left_mouse_down:
+                        self.player.shoot_at_target(pygame.mouse.get_pos())
                     # Update enemies and collect boss commands
                     spawn_minion_requests: List[str] = []
                     for enemy in self.enemies:
@@ -1154,9 +1403,13 @@ class Game:
                                     mx = max(32, min(SCREEN_WIDTH - 32, enemy.rect.centerx + offset_x))
                                     my = max(32, min(SCREEN_HEIGHT - 32, enemy.rect.centery + offset_y))
                                     if random.random() < 0.25:
-                                        self.enemies.append(RangedEnemy(mx, my))
+                                        m = RangedEnemy(mx, my)
+                                        self.assign_enemy_sprite(m)
+                                        self.enemies.append(m)
                                     else:
-                                        self.enemies.append(Enemy(mx, my))
+                                        m = Enemy(mx, my)
+                                        self.assign_enemy_sprite(m)
+                                        self.enemies.append(m)
                     # Potion pickup
                     for potion in self.potions:
                         if not potion.collected and self.player.rect.colliderect(potion.rect):
@@ -1260,7 +1513,11 @@ class Game:
                             dead_count += 1
                             # If this enemy is a splitter, spawn mini enemies
                             if isinstance(enemy, SplitterEnemy):
-                                spawned_minis.extend(enemy.split())
+                                # Spawn mini enemies for a dead splitter and assign sprites
+                                minis = enemy.split()
+                                for m in minis:
+                                    self.assign_enemy_sprite(m)
+                                spawned_minis.extend(minis)
                             # Spawn coins at the location of the dead enemy
                             # Each dead enemy produces a small number of coins.
                             cx = enemy.rect.centerx
@@ -1410,10 +1667,14 @@ class Game:
                     self.saved_score = True
                 # Allow restart or return to menu
                 if keys[pygame.K_RETURN] or keys[pygame.K_SPACE]:
+                    # Reset game state and return to the main menu rather than
+                    # immediately starting a new run.  This allows the player
+                    # to choose when to start again.
                     self.reset_game()
-                    self.state = 'GAME'
+                    self.state = 'MENU'
                     continue
                 if keys[pygame.K_ESCAPE]:
+                    # Esc returns to the menu without resetting run variables
                     self.state = 'MENU'
                     continue
                 # Draw final scene (similar to gameplay but no updates)
@@ -1635,6 +1896,42 @@ class Game:
         self.barrels: List[Barrel] = []
         self.traps: List[SpikeTrap] = []
         self.shop_items: List[ShopItem] = []
+
+        # Reset mouse shooting state
+        self.left_mouse_down = False
+
+    def assign_enemy_sprite(self, enemy: Enemy) -> None:
+        """
+        Assign animation frames to an enemy instance based on its type.
+
+        When spawning enemies in ``load_room``, this helper is used to
+        attach the appropriate set of animation frames from the slime
+        spritesheet.  It leaves any enemy that already has frames
+        unchanged.  Mini enemies use scaled down red frames; other
+        specialisations use colour coding to distinguish behaviour.
+        """
+        # Do not override frames if already assigned (e.g. custom boss)
+        if getattr(enemy, 'anim_frames', None):
+            return
+        frames: Optional[List[pygame.Surface]] = None
+        # Determine the colour set based on enemy type
+        if isinstance(enemy, MiniEnemy):
+            base = self.slime_frames.get('red')
+            if base:
+                frames = [pygame.transform.scale(f, (enemy.rect.width, enemy.rect.height)) for f in base]
+        elif isinstance(enemy, SplitterEnemy):
+            frames = self.slime_frames.get('red')
+        elif isinstance(enemy, RangedEnemy):
+            frames = self.slime_frames.get('blue')
+        elif isinstance(enemy, TurretEnemy) or isinstance(enemy, TeleporterEnemy):
+            frames = self.slime_frames.get('yellow')
+        elif isinstance(enemy, Enemy):
+            frames = self.slime_frames.get('green')
+        # Apply frames if available
+        if frames:
+            enemy.anim_frames = frames
+            enemy.frame_index = 0
+            enemy.anim_timer = 0.0
 
     def draw_menu(self) -> None:
         """Render the start menu with title and high score information."""

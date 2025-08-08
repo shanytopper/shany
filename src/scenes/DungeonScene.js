@@ -1,151 +1,144 @@
-const Phaser = globalThis.Phaser;  
-import { Player } from '../entities/Player.js'
-import { Enemy } from '../entities/Enemy.js'
-import { DungeonGenerator } from '../systems/DungeonGenerator.js'
+// The DungeonScene manages room transitions, spawning, and core gameplay.
+const Phaser = globalThis.Phaser;
+
+import { Player } from '../entities/Player.js';
+import { Enemy } from '../entities/Enemy.js';
 
 export class DungeonScene extends Phaser.Scene {
   constructor() {
-    super('DungeonScene')
-    this.tileSize = 16
-    this.roomTiles = 16
-    this.roomsWide = 4
-    this.roomsHigh = 3
+    super('DungeonScene');
+    this.rooms = [];
+    this.currentRoomIndex = 0;
+    this.visitedRooms = new Set();
   }
 
   create() {
-    const generator = new DungeonGenerator({ roomsWide: this.roomsWide, roomsHigh: this.roomsHigh, tilesPerRoom: this.roomTiles })
-    this.rooms = generator.generate()
+    // Create a group to hold objects for cleanup between rooms
+    this.roomObjects = this.add.group();
+    // Physics groups
+    this.walls = this.physics.add.staticGroup();
+    this.enemies = this.add.group({ runChildUpdate: true });
 
-    // Build a simple tilemap with static wall/floor
-    const mapWidth = this.roomsWide * this.roomTiles
-    const mapHeight = this.roomsHigh * this.roomTiles
-    this.floor = this.add.layer()
-    this.walls = this.physics.add.staticGroup()
+    // Instantiate the player in the center of the scene
+    this.player = new Player(this, this.scale.width / 2, this.scale.height / 2);
+    this.player.setDepth(10);
+    // Set camera to follow the player
+    this.cameras.main.startFollow(this.player);
 
-    for (let ry = 0; ry < this.roomsHigh; ry++) {
-      for (let rx = 0; rx < this.roomsWide; rx++) {
-        if (!this.rooms[ry][rx].exists) continue
-        const roomX = rx * this.roomTiles
-        const roomY = ry * this.roomTiles
-        for (let ty = 0; ty < this.roomTiles; ty++) {
-          for (let tx = 0; tx < this.roomTiles; tx++) {
-            const wx = (roomX + tx) * this.tileSize
-            const wy = (roomY + ty) * this.tileSize
-            const isBorder = ty === 0 || ty === this.roomTiles - 1 || tx === 0 || tx === this.roomTiles - 1
-            if (isBorder) {
-              const wall = this.physics.add.staticImage(wx + this.tileSize / 2, wy + this.tileSize / 2, 'wall')
-              wall.setDisplaySize(this.tileSize, this.tileSize)
-              this.walls.add(wall)
-            } else {
-              const tile = this.add.image(wx + this.tileSize / 2, wy + this.tileSize / 2, 'floor')
-              tile.setDisplaySize(this.tileSize, this.tileSize)
-              this.floor.add(tile)
-            }
+    // Define rooms for the POC
+    // Each room has a spawn function invoked on first entry
+    this.rooms = [
+      {
+        id: 'start',
+        spawn: () => {
+          // No enemies in start room
+        },
+      },
+      {
+        id: 'combat',
+        spawn: () => {
+          for (let i = 0; i < 5; i++) {
+            const x = Phaser.Math.Between(200, this.scale.width - 200);
+            const y = Phaser.Math.Between(100, this.scale.height - 100);
+            const enemy = new Enemy(this, x, y);
+            this.enemies.add(enemy);
           }
-        }
-        // carve doors to adjacent rooms
-        if (ry > 0 && this.rooms[ry - 1][rx].exists) this.clearWall(roomX, roomY, Math.floor(this.roomTiles / 2), 0)
-        if (ry < this.roomsHigh - 1 && this.rooms[ry + 1][rx].exists) this.clearWall(roomX, roomY, Math.floor(this.roomTiles / 2), this.roomTiles - 1)
-        if (rx > 0 && this.rooms[ry][rx - 1].exists) this.clearWall(roomX, roomY, 0, Math.floor(this.roomTiles / 2))
-        if (rx < this.roomsWide - 1 && this.rooms[ry][rx + 1].exists) this.clearWall(roomX, roomY, this.roomTiles - 1, Math.floor(this.roomTiles / 2))
+        },
+      },
+    ];
+
+    // Build the initial room
+    this.loadRoom(this.currentRoomIndex);
+
+    // Player bullet vs. enemy collision
+    this.physics.add.overlap(
+      this.player.bullets,
+      this.enemies,
+      (bullet, enemy) => {
+        bullet.destroy();
+        enemy.takeDamage(1);
+      }
+    );
+    // Player vs. enemy collision
+    this.physics.add.collider(
+      this.player,
+      this.enemies,
+      (player, enemy) => {
+        player.takeDamage(1);
+      }
+    );
+  }
+
+  loadRoom(index) {
+    // Clear existing room objects
+    this.roomObjects.clear(true, true);
+    this.walls.clear(true, true);
+    this.enemies.clear(true, true);
+
+    this.currentRoomIndex = index;
+    const room = this.rooms[index];
+
+    // Build floor using a tileSprite that repeats our dungeon tile
+    const tileSize = 16;
+    const cols = Math.ceil(this.scale.width / tileSize);
+    const rows = Math.ceil(this.scale.height / tileSize);
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const tile = this.add.image(x * tileSize + tileSize / 2, y * tileSize + tileSize / 2, 'dungeon_tile');
+        tile.setDisplaySize(tileSize, tileSize);
+        tile.setDepth(0);
+        this.roomObjects.add(tile);
       }
     }
 
-    // Player
-    const startRoom = this.findFirstRoom()
-    const startPos = this.roomCenterToWorld(startRoom)
-    this.player = new Player(this, startPos.x, startPos.y)
+    // Create border walls
+    const wallThickness = 32;
+    // Top and bottom
+    const top = this.add.rectangle(this.scale.width / 2, wallThickness / 2, this.scale.width, wallThickness, 0x222222);
+    const bottom = this.add.rectangle(this.scale.width / 2, this.scale.height - wallThickness / 2, this.scale.width, wallThickness, 0x222222);
+    // Left and right
+    const left = this.add.rectangle(wallThickness / 2, this.scale.height / 2, wallThickness, this.scale.height, 0x222222);
+    const right = this.add.rectangle(this.scale.width - wallThickness / 2, this.scale.height / 2, wallThickness, this.scale.height, 0x222222);
+    [top, bottom, left, right].forEach((rect) => {
+      this.walls.add(rect);
+    });
+    this.roomObjects.addMultiple([top, bottom, left, right]);
 
-    // Enemies
-    this.enemies = this.add.group({ classType: Enemy, runChildUpdate: true })
-    for (let i = 0; i < 8; i++) {
-      const room = this.randomRoom()
-      const pos = this.roomCenterToWorld(room)
-      const enemy = new Enemy(this, pos.x + Phaser.Math.Between(-40, 40), pos.y + Phaser.Math.Between(-40, 40))
-      this.enemies.add(enemy)
+    // Spawn the room’s enemies if first time visiting
+    if (!this.visitedRooms.has(room.id)) {
+      room.spawn();
     }
+    this.visitedRooms.add(room.id);
 
-    // Collisions
-    this.physics.add.collider(this.player, this.walls)
-    this.physics.add.collider(this.enemies, this.walls)
-    this.physics.add.collider(this.enemies, this.enemies)
+    // Reset player position to center
+    this.player.setPosition(this.scale.width / 2, this.scale.height / 2);
+    // Collide player and enemies with walls
+    this.physics.add.collider(this.player, this.walls);
+    this.physics.add.collider(this.enemies, this.walls);
 
-    this.physics.add.overlap(this.player.bullets, this.enemies, (bullet, enemy) => {
-      bullet.destroy()
-      enemy.takeDamage(1)
-    })
-
-    this.physics.add.collider(this.player.bullets, this.walls, (bullet) => {
-      bullet.destroy()
-    })
-
-    this.physics.add.overlap(this.player, this.enemies, () => {
-      this.player.takeDamage(1)
-      this.cameras.main.flash(100, 255, 0, 0)
-    })
-
-    // Cleanup bullets
-    this.time.addEvent({ delay: 50, loop: true, callback: this.cleanupBullets, callbackScope: this })
-
-    // Camera + world bounds
-    this.cameras.main.setBounds(0, 0, mapWidth * this.tileSize, mapHeight * this.tileSize)
-    this.physics.world.setBounds(0, 0, mapWidth * this.tileSize, mapHeight * this.tileSize)
-    this.cameras.main.startFollow(this.player, true, 0.1, 0.1)
-
-    // Start UI
-    this.scene.launch('UIScene')
+    // Setup door interactivity: For the POC we add a door on the right side
+    // In room 0, door leads to room 1; in room 1, door leads back to 0
+    const doorX = this.scale.width - wallThickness - 20;
+    const doorY = this.scale.height / 2;
+    const door = this.add.image(doorX, doorY, 'door');
+    door.setInteractive();
+    door.on('pointerdown', () => {
+      // Only allow exit if enemies are cleared
+      if (this.enemies.countActive(true) === 0) {
+        const nextIndex = index === 0 ? 1 : 0;
+        this.loadRoom(nextIndex);
+      }
+    });
+    this.roomObjects.add(door);
   }
 
-  update(time) {
-    this.player.update(time)
-    this.enemies.children.iterate((enemy) => {
-      if (enemy && enemy.active) enemy.update(this.player)
-    })
-  }
-
-  cleanupBullets() {
-    const now = this.time.now
+  update(time, delta) {
+    this.player.update(time);
+    // Remove bullets that have expired
+    const now = this.time.now;
     this.player.bullets.getChildren().forEach((b) => {
-      if (!b.active) return
-      if (now - b.spawnedAt > b.lifespanMs) b.destroy()
-    })
-  }
-
-  roomCenterToWorld(room) {
-    const x = (room.rx * this.roomTiles + Math.floor(this.roomTiles / 2)) * this.tileSize
-    const y = (room.ry * this.roomTiles + Math.floor(this.roomTiles / 2)) * this.tileSize
-    return { x, y }
-  }
-
-  findFirstRoom() {
-    for (let ry = 0; ry < this.roomsHigh; ry++) {
-      for (let rx = 0; rx < this.roomsWide; rx++) {
-        if (this.rooms[ry][rx].exists) return { rx, ry }
-      }
-    }
-    return { rx: 0, ry: 0 }
-  }
-
-  randomRoom() {
-    const candidates = []
-    for (let ry = 0; ry < this.roomsHigh; ry++) {
-      for (let rx = 0; rx < this.roomsWide; rx++) {
-        if (this.rooms[ry][rx].exists) candidates.push({ rx, ry })
-      }
-    }
-    return Phaser.Utils.Array.GetRandom(candidates)
-  }
-
-  clearWall(roomX, roomY, tx, ty) {
-    const wx = (roomX + tx) * this.tileSize + this.tileSize / 2
-    const wy = (roomY + ty) * this.tileSize + this.tileSize / 2
-    // Find a wall at this position and remove it
-    const found = this.walls.getChildren().find((w) => Math.abs(w.x - wx) < 1 && Math.abs(w.y - wy) < 1)
-    if (found) {
-      this.walls.remove(found, true, true)
-      const tile = this.add.image(wx, wy, 'floor')
-      tile.setDisplaySize(this.tileSize, this.tileSize)
-      this.floor.add(tile)
-    }
+      if (!b.active) return;
+      if (now - b.spawnedAt > b.lifespanMs) b.destroy();
+    });
   }
 }

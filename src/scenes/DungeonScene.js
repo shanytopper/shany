@@ -140,5 +140,10 @@ export class DungeonScene extends Phaser.Scene {
       if (!b.active) return;
       if (now - b.spawnedAt > b.lifespanMs) b.destroy();
     });
+
+    // Update enemies to chase the player and handle their animations
+    this.enemies.getChildren().forEach((enemy) => {
+      enemy.update(this.player);
+    });
   }
 }

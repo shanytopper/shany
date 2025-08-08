@@ -9,23 +9,26 @@ export class BootScene extends Phaser.Scene {
   preload() {
     // Load our custom dungeon tile. This can be used for floors and walls.
     this.load.image('dungeon_tile', 'assets/dungeon_tile.png');
+
+    // Load sprite sheets for the player and enemy. Each sheet is laid out in
+    // three columns by four rows, with each cell 16x16 pixels. Using
+    // spritesheets allows us to create walking animations in different
+    // directions (down, up, left, right) and animate the enemy.
+    this.load.spritesheet('player', 'assets/player_spritesheet.png', {
+      frameWidth: 16,
+      frameHeight: 16,
+    });
+    this.load.spritesheet('enemy', 'assets/enemy_spritesheet.png', {
+      frameWidth: 16,
+      frameHeight: 16,
+    });
   }
 
   create() {
-    // Generate placeholder textures for player, enemy, bullet and doors using
-    // simple shapes. These can be replaced later with proper sprites.
-    this.textures.generate('player', {
-      data: ['  11  ', ' 1111 ', '111111', '111111', ' 1111 ', '  11  '],
-      pixelWidth: 2,
-      pixelHeight: 2,
-      palette: { '1': '#c1e7ff' },
-    });
-    this.textures.generate('enemy', {
-      data: ['222222', '266662', '266662', '266662', '266662', '222222'],
-      pixelWidth: 2,
-      pixelHeight: 2,
-      palette: { '2': '#ba4141', '6': '#ff7777' },
-    });
+    // Generate simple textures for bullets and doors. We continue to use
+    // procedural textures for these objects since they are very small and
+    // easier to define inline. The player and enemy textures are now
+    // provided by loaded spritesheets.
     this.textures.generate('bullet', {
       data: ['F'],
       pixelWidth: 1,
@@ -38,7 +41,47 @@ export class BootScene extends Phaser.Scene {
       pixelHeight: 2,
       palette: { '5': '#444444', '6': '#888888' },
     });
-    // Move immediately to the DungeonScene when assets are ready
+
+    // Define animations for the player. The spritesheet has four rows of
+    // animations: row 0 (frames 0-2) faces down, row 1 (frames 3-5) faces up,
+    // row 2 (frames 6-8) faces left, and row 3 (frames 9-11) faces right.
+    this.anims.create({
+      key: 'player-down',
+      frames: this.anims.generateFrameNumbers('player', { start: 0, end: 2 }),
+      frameRate: 8,
+      repeat: -1,
+    });
+    this.anims.create({
+      key: 'player-up',
+      frames: this.anims.generateFrameNumbers('player', { start: 3, end: 5 }),
+      frameRate: 8,
+      repeat: -1,
+    });
+    this.anims.create({
+      key: 'player-left',
+      frames: this.anims.generateFrameNumbers('player', { start: 6, end: 8 }),
+      frameRate: 8,
+      repeat: -1,
+    });
+    this.anims.create({
+      key: 'player-right',
+      frames: this.anims.generateFrameNumbers('player', { start: 9, end: 11 }),
+      frameRate: 8,
+      repeat: -1,
+    });
+
+    // Define a simple walk animation for the enemy. We will reuse the first
+    // three frames (row 0) for all movement directions and flip the sprite
+    // horizontally when moving left in the enemy update method.
+    this.anims.create({
+      key: 'enemy-walk',
+      frames: this.anims.generateFrameNumbers('enemy', { start: 0, end: 2 }),
+      frameRate: 6,
+      repeat: -1,
+    });
+
+    // When the assets and animations are ready, move immediately to the
+    // dungeon scene.
     this.scene.start('DungeonScene');
   }
 }

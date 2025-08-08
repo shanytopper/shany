@@ -26,6 +26,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.lastFiredAtMs = 0;
     this.health = 6;
     this.bullets = scene.physics.add.group({ classType: Phaser.Physics.Arcade.Image });
+
+    // Keep track of the last facing direction for idle frames.
+    this.lastDirection = 'down';
   }
 
   update(time) {
@@ -37,6 +40,48 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     if (this.cursors.down.isDown) velocity.y += 1;
     velocity.normalize().scale(this.speed);
     this.setVelocity(velocity.x, velocity.y);
+
+    // Play walking animations based on movement direction. If the
+    // player is not moving, stop the animation and show the first
+    // frame of the last direction faced.
+    if (velocity.lengthSq() === 0) {
+      this.anims.stop();
+      // Set to the first frame of the last facing direction when idle
+      switch (this.lastDirection) {
+        case 'up':
+          this.setFrame(3);
+          break;
+        case 'left':
+          this.setFrame(6);
+          break;
+        case 'right':
+          this.setFrame(9);
+          break;
+        case 'down':
+        default:
+          this.setFrame(0);
+          break;
+      }
+    } else {
+      // Determine whether horizontal or vertical movement is dominant
+      if (Math.abs(velocity.x) > Math.abs(velocity.y)) {
+        if (velocity.x > 0) {
+          this.lastDirection = 'right';
+          this.anims.play('player-right', true);
+        } else {
+          this.lastDirection = 'left';
+          this.anims.play('player-left', true);
+        }
+      } else {
+        if (velocity.y > 0) {
+          this.lastDirection = 'down';
+          this.anims.play('player-down', true);
+        } else {
+          this.lastDirection = 'up';
+          this.anims.play('player-up', true);
+        }
+      }
+    }
     // Shooting
     const shootDir = new Phaser.Math.Vector2(0, 0);
     if (this.shootKeys.left.isDown) shootDir.x -= 1;

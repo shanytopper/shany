@@ -79,7 +79,9 @@ export class DungeonScene extends Phaser.Scene {
     const room = this.rooms[index];
 
     // Build floor using a tileSprite that repeats our dungeon tile
-    const tileSize = 16;
+    // Increase the tile size to 32 pixels so that the floor and walls appear
+    // larger on screen and are easier to see.
+    const tileSize = 32;
     const cols = Math.ceil(this.scale.width / tileSize);
     const rows = Math.ceil(this.scale.height / tileSize);
     for (let y = 0; y < rows; y++) {

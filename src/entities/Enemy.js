@@ -10,6 +10,8 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.setCircle(6, 1, 1);
     this.speed = 60;
     this.health = 2;
+    // Scale up the enemy sprite to make it more visible.
+    this.setScale(2);
     // Start the default walk animation
     this.anims.play('enemy-walk');
   }

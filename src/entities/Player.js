@@ -7,6 +7,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     scene.add.existing(this);
     scene.physics.add.existing(this);
     this.setCollideWorldBounds(true);
+    // Scale the player sprite up for better visibility.
+    this.setScale(2);
     // Movement input: WASD
     this.cursors = scene.input.keyboard.addKeys({
       up: Phaser.Input.Keyboard.KeyCodes.W,
@@ -15,12 +17,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       right: Phaser.Input.Keyboard.KeyCodes.D,
     });
     // Shooting input: arrow keys
-    this.shootKeys = scene.input.keyboard.addKeys({
-      up: Phaser.Input.Keyboard.KeyCodes.UP,
-      down: Phaser.Input.Keyboard.KeyCodes.DOWN,
-      left: Phaser.Input.Keyboard.KeyCodes.LEFT,
-      right: Phaser.Input.Keyboard.KeyCodes.RIGHT,
-    });
+    // Shooting will be performed via the mouse button instead of arrow keys.
+    this.shootKeys = {};
     this.speed = 180;
     this.fireCooldownMs = 200;
     this.lastFiredAtMs = 0;
@@ -83,21 +81,41 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       }
     }
     // Shooting
-    const shootDir = new Phaser.Math.Vector2(0, 0);
-    if (this.shootKeys.left.isDown) shootDir.x -= 1;
-    if (this.shootKeys.right.isDown) shootDir.x += 1;
-    if (this.shootKeys.up.isDown) shootDir.y -= 1;
-    if (this.shootKeys.down.isDown) shootDir.y += 1;
-    if (shootDir.lengthSq() > 0 && time - this.lastFiredAtMs > this.fireCooldownMs) {
+    // Use the mouse button for shooting. When the left mouse button
+    // is held down, fire a bullet in the direction the player is
+    // currently facing. This uses the lastDirection property set by
+    // movement logic above. The fire rate is governed by
+    // fireCooldownMs.
+    const pointer = this.scene.input.activePointer;
+    if (pointer.isDown && time - this.lastFiredAtMs > this.fireCooldownMs) {
       this.lastFiredAtMs = time;
-      this.fireBullet(shootDir.normalize());
+      let dir;
+      switch (this.lastDirection) {
+        case 'up':
+          dir = new Phaser.Math.Vector2(0, -1);
+          break;
+        case 'left':
+          dir = new Phaser.Math.Vector2(-1, 0);
+          break;
+        case 'right':
+          dir = new Phaser.Math.Vector2(1, 0);
+          break;
+        case 'down':
+        default:
+          dir = new Phaser.Math.Vector2(0, 1);
+          break;
+      }
+      this.fireBullet(dir);
     }
   }
 
   fireBullet(direction) {
     const bullet = this.scene.physics.add.image(this.x, this.y, 'bullet');
     bullet.setDepth(5);
-    bullet.setCircle(2);
+    // Enlarge the bullet for better visibility and set its body size accordingly.
+    bullet.setScale(2);
+    bullet.setCircle(2 * 2); // radius scales with the scale factor
+    // Set velocity based on the provided direction. Bullets travel faster than player movement.
     bullet.setVelocity(direction.x * 360, direction.y * 360);
     bullet.lifespanMs = 700;
     bullet.spawnedAt = this.scene.time.now;

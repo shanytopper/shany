@@ -32,6 +32,7 @@ import sys
 import math
 import random
 import pygame
+import json
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -80,6 +81,14 @@ BOSS_BULLET_SPEED: float = 300.0
 BOSS_SHOT_COOLDOWN_MS: int = 1500
 BOSS_MINION_COOLDOWN_MS: int = 3000
 
+# Probability of spawning a TurretEnemy instead of a normal or ranged enemy.  A value between 0 and 1.
+TURRET_PROBABILITY: float = 0.15
+
+# High score storage.  When the player wins the game, their run time and kill count
+# are compared against the best recorded times and kills.  The high score is
+# persisted in a JSON file so that subsequent sessions can display and update it.
+HIGHSCORE_FILE: str = os.path.join(os.path.dirname(__file__), 'highscore.json')
+
 # Upgrade definitions.  When a room (except the last) is cleared, an upgrade
 # spawns.  The upgrade chosen randomly from this set will modify the player
 # stat indicated by the provided lambda.
@@ -88,6 +97,10 @@ UPGRADE_TYPES = {
     'Rapid Fire': lambda p: setattr(p, 'fire_rate_ms', max(50, p.fire_rate_ms - 50)),
     'Fleet Feet': lambda p: setattr(p, 'speed', p.speed + 40),
     'Vitality': lambda p: (setattr(p, 'max_health', p.max_health + 20), setattr(p, 'health', min(p.max_health + 20, p.health + 20))),
+    # Fire additional bullets per shot.  Spread Shot increases bullet_count by 2 up to a maximum of 5.
+    'Spread Shot': lambda p: setattr(p, 'bullet_count', min(5, p.bullet_count + 2)),
+    # Grant a protective shield that absorbs one incoming hit.
+    'Shield': lambda p: setattr(p, 'shield', p.shield + 1),
 }
 
 
@@ -233,6 +246,13 @@ class Player(Entity):
         self.last_dash_time: float = 0.0
         self.invulnerable: bool = False
 
+        # Additional combat attributes
+        # Number of bullets fired per shot (spread shot).  Starts at 1 and can be
+        # increased via upgrades.
+        self.bullet_count: int = 1
+        # Shield points; each point absorbs one hit from enemies or bullets
+        self.shield: int = 0
+
 
     def handle_input(self, keys: pygame.key.ScancodeWrapper, dt: float) -> None:
         self.vel.update(0, 0)
@@ -296,19 +316,27 @@ class Player(Entity):
         """
         cx = self.rect.centerx
         cy = self.rect.centery
-        vx, vy = 0.0, 0.0
+        # Determine base angle for the chosen direction (in degrees)
         if direction == UP:
-            vy = -BULLET_SPEED
+            base_angle = -90.0  # up is -90 degrees
         elif direction == DOWN:
-            vy = BULLET_SPEED
+            base_angle = 90.0
         elif direction == LEFT:
-            vx = -BULLET_SPEED
-        elif direction == RIGHT:
-            vx = BULLET_SPEED
-        bullet = Bullet(cx, cy, vx, vy)
-        # Apply player's current damage to the bullet
-        bullet.damage = self.bullet_damage
-        self.bullets.append(bullet)
+            base_angle = 180.0
+        else:  # RIGHT
+            base_angle = 0.0
+        # Spread angle between bullets (degrees).  A modest spread keeps shots controlled.
+        spread_deg = 15.0
+        # Compute starting offset so that bullets are centred around the base angle
+        total_spread = spread_deg * (self.bullet_count - 1)
+        for i in range(self.bullet_count):
+            angle_deg = base_angle - total_spread / 2 + i * spread_deg
+            angle_rad = math.radians(angle_deg)
+            vx = math.cos(angle_rad) * BULLET_SPEED
+            vy = math.sin(angle_rad) * BULLET_SPEED
+            bullet = Bullet(cx, cy, vx, vy)
+            bullet.damage = self.bullet_damage
+            self.bullets.append(bullet)
 
     def update(self, dt: float) -> None:
         super().update(dt)
@@ -436,6 +464,38 @@ class RangedEnemy(Enemy):
             b.draw(surface)
 
 
+class TurretEnemy(Entity):
+    """Enemy that remains stationary but fires bullets in multiple directions."""
+    def __init__(self, x: float, y: float) -> None:
+        super().__init__(x, y, 32, 32, ENEMY_MAX_HEALTH)
+        # Turret does not move
+        self.cooldown_ms: int = 1200
+        self.last_shot_time: float = 0.0
+        self.bullets: List[EnemyBullet] = []
+        self.color = (200, 120, 40)
+
+    def update(self, dt: float, player: Player) -> None:
+        # Turret does not chase the player
+        now = pygame.time.get_ticks()
+        if now - self.last_shot_time >= self.cooldown_ms:
+            self.last_shot_time = now
+            # Fire bullets in eight cardinal directions (45 degree increments)
+            for i in range(8):
+                angle = (math.pi / 4.0) * i
+                vx = math.cos(angle) * BULLET_SPEED * 0.6
+                vy = math.sin(angle) * BULLET_SPEED * 0.6
+                self.bullets.append(EnemyBullet(self.rect.centerx, self.rect.centery, vx, vy))
+        # Update bullets
+        for b in self.bullets:
+            b.update(dt)
+        self.bullets = [b for b in self.bullets if b.alive]
+
+    def draw(self, surface: pygame.Surface) -> None:
+        pygame.draw.rect(surface, self.color, self.rect)
+        for b in self.bullets:
+            b.draw(surface)
+
+
 class Potion:
     """Collectible potion that heals the player."""
     def __init__(self, x: float, y: float) -> None:
@@ -536,31 +596,25 @@ class BossEnemy(Enemy):
 class Game:
     """High level orchestrator: runs the loop and manages rooms and entities."""
     def __init__(self) -> None:
+        # Initialise Pygame and create the window.  We do this here rather than
+        # inside run() so that tests which instantiate Game can still operate
+        # with dummy drivers.
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Rogue‑Lite POC")
         self.clock = pygame.time.Clock()
-        # Load hero sprite sheet and slice into frames
+        # Load hero frames once; this asset is reused across runs
         self.player_frames = self.load_hero_frames(os.path.join(os.path.dirname(__file__), 'hero.png'))
-        # Create dungeon
-        self.dungeon = Dungeon(ROOM_COUNT)
-        self.current_room_index = 0
-        # Create player at centre
-        self.player = Player(SCREEN_WIDTH / 2 - 16, SCREEN_HEIGHT / 2 - 24, self.player_frames)
-        # Entities for current room
-        self.enemies: List[Enemy] = []
-        self.potions: List[Potion] = []
-        # Upgrades present in current room
-        self.upgrades: List[Upgrade] = []
-        # UI state
-        self.message: Optional[str] = None
-        self.message_timer: float = 0.0
-        self.game_over: bool = False
-        # Score tracking
-        self.start_time: float = pygame.time.get_ticks()
-        self.kills: int = 0
-        # Initialize first room
-        self.load_room(0)
+        # High score data: {"best_time": int or None, "best_kills": int or None}
+        self.highscore: Dict[str, Optional[int]] = self.load_highscore()
+        # State machine: 'MENU', 'GAME', 'GAME_OVER'
+        self.state: str = 'MENU'
+        # Keep track of whether high score has been updated this run (to avoid
+        # repeatedly writing the file during the game over loop)
+        self.saved_score: bool = False
+        # Immediately reset the game to set up initial variables.  The
+        # game is paused in the menu state until the player starts.
+        self.reset_game()
 
     def load_hero_frames(self, path: str) -> Dict[int, List[pygame.Surface]]:
         sheet = pygame.image.load(path).convert_alpha()
@@ -598,8 +652,13 @@ class Game:
             for _ in range(room.enemy_count):
                 x = rand_int(60, SCREEN_WIDTH - 60)
                 y = rand_int(60, SCREEN_HEIGHT - 60)
-                # 30% chance of ranged enemy
-                if random.random() < 0.3:
+                r = random.random()
+                # Spawn a turret with probability TURRET_PROBABILITY, otherwise choose between
+                # ranged and melee enemies.  Turrets are stationary but dangerous thanks
+                # to their 8‑direction bullet patterns.
+                if r < TURRET_PROBABILITY:
+                    self.enemies.append(TurretEnemy(x, y))
+                elif r < TURRET_PROBABILITY + 0.30:
                     self.enemies.append(RangedEnemy(x, y))
                 else:
                     self.enemies.append(Enemy(x, y))
@@ -616,171 +675,221 @@ class Game:
         self.message_timer = duration
 
     def run(self) -> None:
-        # Main game loop
+        """
+        Main game loop implementing a simple state machine.  The loop cycles
+        between menu, gameplay and game over states based on the player's
+        actions.  In the menu, pressing Enter starts a new game; in the
+        game over state, Enter restarts and Esc returns to the menu.
+        """
         while True:
             dt = self.clock.tick(60) / 1000.0  # delta time in seconds
+            # Handle system events (quit)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     sys.exit()
             keys = pygame.key.get_pressed()
-            if not self.game_over:
-                # Update player
-                self.player.handle_input(keys, dt)
-                self.player.update(dt)
-                # Update enemies and collect special commands (e.g. boss spawning minions)
-                spawn_minion_requests = []
-                for enemy in self.enemies:
-                    # call update which may return a list of actions for boss
-                    result = enemy.update(dt, self.player)
-                    if isinstance(enemy, BossEnemy) and isinstance(result, list):
-                        spawn_minion_requests.extend(result)
-                # Bullet vs enemy collisions
-                for bullet in self.player.bullets:
-                    for enemy in self.enemies:
-                        if enemy.alive and bullet.alive and enemy.rect.collidepoint(bullet.pos):
-                            enemy.damage(bullet.damage)
-                            bullet.alive = False
-                # Enemy vs player collisions (melee)
-                for enemy in self.enemies:
-                    if enemy.alive and self.player.rect.colliderect(enemy.rect):
-                        # damage only if not invulnerable (e.g. during dash)
-                        if not self.player.invulnerable:
-                            self.player.damage(10)
-                        # simple knockback: push enemy away from player
-                        dx = enemy.rect.centerx - self.player.rect.centerx
-                        dy = enemy.rect.centery - self.player.rect.centery
-                        dist = max(math.hypot(dx, dy), 0.1)
-                        enemy.rect.x += int((dx / dist) * 20)
-                        enemy.rect.y += int((dy / dist) * 20)
 
-                # Enemy bullet collisions
-                # Collect all enemy bullets into a single list for checking
-                enemy_bullets: List[EnemyBullet] = []
-                for e in self.enemies:
-                    if isinstance(e, RangedEnemy):
-                        enemy_bullets.extend(e.bullets)
-                    elif isinstance(e, BossEnemy):
-                        enemy_bullets.extend(e.bullets)
-                for b in enemy_bullets:
-                    if b.alive and self.player.rect.collidepoint(b.pos):
-                        if not self.player.invulnerable:
-                            self.player.damage(b.damage)
-                        b.alive = False
+            # --- Menu state ---
+            if self.state == 'MENU':
+                # Check for start input
+                if keys[pygame.K_RETURN] or keys[pygame.K_SPACE]:
+                    self.reset_game()
+                    self.state = 'GAME'
+                # Draw the menu and continue
+                self.draw_menu()
+                continue
 
-                # Process boss commands for minion spawning.  Each command triggers spawning of two minions.
-                if spawn_minion_requests:
+            # --- Game state ---
+            if self.state == 'GAME':
+                if not self.game_over:
+                    # Update player
+                    self.player.handle_input(keys, dt)
+                    self.player.update(dt)
+                    # Update enemies and collect boss commands
+                    spawn_minion_requests: List[str] = []
                     for enemy in self.enemies:
-                        if isinstance(enemy, BossEnemy):
-                            for _ in spawn_minion_requests:
-                                # spawn one minion on each request
-                                offset_x = rand_int(-80, 80)
-                                offset_y = rand_int(-80, 80)
-                                mx = max(32, min(SCREEN_WIDTH - 32, enemy.rect.centerx + offset_x))
-                                my = max(32, min(SCREEN_HEIGHT - 32, enemy.rect.centery + offset_y))
-                                if random.random() < 0.25:
-                                    self.enemies.append(RangedEnemy(mx, my))
+                        result = enemy.update(dt, self.player)
+                        if isinstance(enemy, BossEnemy) and isinstance(result, list):
+                            spawn_minion_requests.extend(result)
+                    # Bullet vs enemy collisions
+                    for bullet in self.player.bullets:
+                        for enemy in self.enemies:
+                            if enemy.alive and bullet.alive and enemy.rect.collidepoint(bullet.pos):
+                                enemy.damage(bullet.damage)
+                                bullet.alive = False
+                    # Enemy vs player collisions (melee)
+                    for enemy in self.enemies:
+                        if enemy.alive and self.player.rect.colliderect(enemy.rect):
+                            if not self.player.invulnerable:
+                                if self.player.shield > 0:
+                                    self.player.shield -= 1
+                                    self.show_message("Shield absorbed hit!", duration=1.5)
                                 else:
-                                    self.enemies.append(Enemy(mx, my))
-
-                # Potion pickup
-                for potion in self.potions:
-                    if not potion.collected and self.player.rect.colliderect(potion.rect):
-                        potion.collected = True
-                        self.player.heal(POTION_HEAL)
-
-                # Upgrade pickup
-                for upgrade in self.upgrades:
-                    if not upgrade.collected and self.player.rect.colliderect(upgrade.rect):
-                        upgrade.apply(self.player)
-                        # Show message to indicate pickup
-                        self.show_message(f"Picked up {upgrade.name}!", duration=3.0)
-
-                # Remove dead enemies and count kills
-                enemies_before = len(self.enemies)
-                self.enemies = [e for e in self.enemies if e.alive]
-                kills_this_frame = max(0, enemies_before - len(self.enemies))
-                self.kills += kills_this_frame
-                # Check room cleared
-                if enemies_before > 0 and not self.enemies and not self.dungeon.get_room(self.current_room_index).cleared:
-                    self.dungeon.get_room(self.current_room_index).cleared = True
-                    # If not the final room, spawn an upgrade item in the cleared room
-                    if self.current_room_index != ROOM_COUNT - 1:
-                        # Randomly choose an upgrade
-                        name, effect = random.choice(list(UPGRADE_TYPES.items()))
-                        ux = rand_int(80, SCREEN_WIDTH - 80)
-                        uy = rand_int(80, SCREEN_HEIGHT - 80)
-                        self.upgrades.append(Upgrade(name, effect, ux, uy))
-                    self.show_message("Room cleared!")
-                # Update message timer
-                if self.message:
-                    self.message_timer -= dt
-                    if self.message_timer <= 0:
-                        self.message = None
-                # Room transitions (doors).  Only allow when room cleared.
+                                    self.player.damage(10)
+                            dx = enemy.rect.centerx - self.player.rect.centerx
+                            dy = enemy.rect.centery - self.player.rect.centery
+                            dist = max(math.hypot(dx, dy), 0.1)
+                            enemy.rect.x += int((dx / dist) * 20)
+                            enemy.rect.y += int((dy / dist) * 20)
+                    # Enemy bullet collisions
+                    enemy_bullets: List[EnemyBullet] = []
+                    for e in self.enemies:
+                        if isinstance(e, RangedEnemy):
+                            enemy_bullets.extend(e.bullets)
+                        elif isinstance(e, BossEnemy):
+                            enemy_bullets.extend(e.bullets)
+                        elif isinstance(e, TurretEnemy):
+                            enemy_bullets.extend(e.bullets)
+                    for b in enemy_bullets:
+                        if b.alive and self.player.rect.collidepoint(b.pos):
+                            if not self.player.invulnerable:
+                                if self.player.shield > 0:
+                                    self.player.shield -= 1
+                                    self.show_message("Shield absorbed hit!", duration=1.5)
+                                else:
+                                    self.player.damage(b.damage)
+                            b.alive = False
+                    # Process boss spawn requests
+                    if spawn_minion_requests:
+                        for enemy in self.enemies:
+                            if isinstance(enemy, BossEnemy):
+                                for _ in spawn_minion_requests:
+                                    offset_x = rand_int(-80, 80)
+                                    offset_y = rand_int(-80, 80)
+                                    mx = max(32, min(SCREEN_WIDTH - 32, enemy.rect.centerx + offset_x))
+                                    my = max(32, min(SCREEN_HEIGHT - 32, enemy.rect.centery + offset_y))
+                                    if random.random() < 0.25:
+                                        self.enemies.append(RangedEnemy(mx, my))
+                                    else:
+                                        self.enemies.append(Enemy(mx, my))
+                    # Potion pickup
+                    for potion in self.potions:
+                        if not potion.collected and self.player.rect.colliderect(potion.rect):
+                            potion.collected = True
+                            self.player.heal(POTION_HEAL)
+                    # Upgrade pickup
+                    for upgrade in self.upgrades:
+                        if not upgrade.collected and self.player.rect.colliderect(upgrade.rect):
+                            upgrade.apply(self.player)
+                            self.show_message(f"Picked up {upgrade.name}!", duration=3.0)
+                    # Remove dead enemies and count kills
+                    enemies_before = len(self.enemies)
+                    self.enemies = [e for e in self.enemies if e.alive]
+                    kills_this_frame = max(0, enemies_before - len(self.enemies))
+                    self.kills += kills_this_frame
+                    # Check room cleared
+                    if enemies_before > 0 and not self.enemies and not self.dungeon.get_room(self.current_room_index).cleared:
+                        self.dungeon.get_room(self.current_room_index).cleared = True
+                        if self.current_room_index != ROOM_COUNT - 1:
+                            name, effect = random.choice(list(UPGRADE_TYPES.items()))
+                            ux = rand_int(80, SCREEN_WIDTH - 80)
+                            uy = rand_int(80, SCREEN_HEIGHT - 80)
+                            self.upgrades.append(Upgrade(name, effect, ux, uy))
+                        self.show_message("Room cleared!")
+                    # Update message timer
+                    if self.message:
+                        self.message_timer -= dt
+                        if self.message_timer <= 0:
+                            self.message = None
+                    # Room transitions
+                    room = self.dungeon.get_room(self.current_room_index)
+                    if room.cleared:
+                        if self.player.rect.top <= 0 and UP in room.neighbors:
+                            self.player.rect.top = SCREEN_HEIGHT - self.player.rect.height - 2
+                            self.load_room(room.neighbors[UP])
+                        elif self.player.rect.bottom >= SCREEN_HEIGHT - 1 and DOWN in room.neighbors:
+                            self.player.rect.bottom = self.player.rect.height + 2
+                            self.load_room(room.neighbors[DOWN])
+                        elif self.player.rect.left <= 0 and LEFT in room.neighbors:
+                            self.player.rect.left = SCREEN_WIDTH - self.player.rect.width - 2
+                            self.load_room(room.neighbors[LEFT])
+                        elif self.player.rect.right >= SCREEN_WIDTH - 1 and RIGHT in room.neighbors:
+                            self.player.rect.right = self.player.rect.width + 2
+                            self.load_room(room.neighbors[RIGHT])
+                    # Check victory / defeat
+                    if all(r.cleared for r in self.dungeon.rooms) and not self.game_over:
+                        self.game_over = True
+                        self.display_game_over_message(victory=True)
+                        self.state = 'GAME_OVER'
+                    if self.player.health <= 0 and not self.game_over:
+                        self.game_over = True
+                        self.display_game_over_message(victory=False)
+                        self.state = 'GAME_OVER'
+                # Draw gameplay scene
+                self.screen.fill(COLOR_BG)
+                pygame.draw.rect(self.screen, COLOR_WALL, pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT), 4)
                 room = self.dungeon.get_room(self.current_room_index)
                 if room.cleared:
-                    # Top door
-                    if self.player.rect.top <= 0 and UP in room.neighbors:
-                        self.player.rect.top = SCREEN_HEIGHT - self.player.rect.height - 2
-                        self.load_room(room.neighbors[UP])
-                    # Bottom door
-                    elif self.player.rect.bottom >= SCREEN_HEIGHT - 1 and DOWN in room.neighbors:
-                        self.player.rect.bottom = self.player.rect.height + 2
-                        self.load_room(room.neighbors[DOWN])
-                    # Left door
-                    elif self.player.rect.left <= 0 and LEFT in room.neighbors:
-                        self.player.rect.left = SCREEN_WIDTH - self.player.rect.width - 2
-                        self.load_room(room.neighbors[LEFT])
-                    # Right door
-                    elif self.player.rect.right >= SCREEN_WIDTH - 1 and RIGHT in room.neighbors:
-                        self.player.rect.right = self.player.rect.width + 2
-                        self.load_room(room.neighbors[RIGHT])
-                # Check victory
-                if all(r.cleared for r in self.dungeon.rooms) and not self.game_over:
-                    self.game_over = True
-                    self.display_game_over_message(victory=True)
-                # Check player death
-                if self.player.health <= 0 and not self.game_over:
-                    self.game_over = True
-                    self.display_game_over_message(victory=False)
-            # Draw
-            self.screen.fill(COLOR_BG)
-            # Draw walls (simple rectangle around edges)
-            pygame.draw.rect(self.screen, COLOR_WALL, pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT), 4)
-            # Draw doors as gaps when room cleared
-            room = self.dungeon.get_room(self.current_room_index)
-            if room.cleared:
-                door_width = 60
-                door_thickness = 4
-                # Up
-                if UP in room.neighbors:
-                    pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, 0, door_width, door_thickness))
-                # Down
-                if DOWN in room.neighbors:
-                    pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, SCREEN_HEIGHT - door_thickness, door_width, door_thickness))
-                # Left
-                if LEFT in room.neighbors:
-                    pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(0, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
-                # Right
-                if RIGHT in room.neighbors:
-                    pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(SCREEN_WIDTH - door_thickness, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
-            # Draw potions
-            for potion in self.potions:
-                potion.draw(self.screen)
-            # Draw upgrades
-            for upgrade in self.upgrades:
-                upgrade.draw(self.screen)
-            # Draw entities
-            for enemy in self.enemies:
-                enemy.draw(self.screen)
-            self.player.draw(self.screen)
-            # Draw UI (health bar and room info)
-            self.draw_ui()
-            # Draw message
-            if self.message:
-                self.draw_message(self.message)
-            pygame.display.flip()
+                    door_width = 60
+                    door_thickness = 4
+                    if UP in room.neighbors:
+                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, 0, door_width, door_thickness))
+                    if DOWN in room.neighbors:
+                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, SCREEN_HEIGHT - door_thickness, door_width, door_thickness))
+                    if LEFT in room.neighbors:
+                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(0, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
+                    if RIGHT in room.neighbors:
+                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(SCREEN_WIDTH - door_thickness, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
+                for potion in self.potions:
+                    potion.draw(self.screen)
+                for upgrade in self.upgrades:
+                    upgrade.draw(self.screen)
+                for enemy in self.enemies:
+                    enemy.draw(self.screen)
+                self.player.draw(self.screen)
+                self.draw_ui()
+                if self.message:
+                    self.draw_message(self.message)
+                pygame.display.flip()
+                continue
+
+            # --- Game over state ---
+            if self.state == 'GAME_OVER':
+                # Save highscore once when game_over triggers (only if victory)
+                if not self.saved_score:
+                    elapsed_ms = pygame.time.get_ticks() - self.start_time
+                    # Only update high score on victory (all rooms cleared)
+                    if all(r.cleared for r in self.dungeon.rooms):
+                        self.save_highscore(elapsed_ms, self.kills)
+                    else:
+                        # Even if not victorious, update best kills
+                        self.save_highscore(elapsed_ms, self.kills)
+                    self.saved_score = True
+                # Allow restart or return to menu
+                if keys[pygame.K_RETURN] or keys[pygame.K_SPACE]:
+                    self.reset_game()
+                    self.state = 'GAME'
+                    continue
+                if keys[pygame.K_ESCAPE]:
+                    self.state = 'MENU'
+                    continue
+                # Draw final scene (similar to gameplay but no updates)
+                self.screen.fill(COLOR_BG)
+                pygame.draw.rect(self.screen, COLOR_WALL, pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT), 4)
+                room = self.dungeon.get_room(self.current_room_index)
+                if room.cleared:
+                    door_width = 60
+                    door_thickness = 4
+                    if UP in room.neighbors:
+                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, 0, door_width, door_thickness))
+                    if DOWN in room.neighbors:
+                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, SCREEN_HEIGHT - door_thickness, door_width, door_thickness))
+                    if LEFT in room.neighbors:
+                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(0, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
+                    if RIGHT in room.neighbors:
+                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(SCREEN_WIDTH - door_thickness, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
+                for potion in self.potions:
+                    potion.draw(self.screen)
+                for upgrade in self.upgrades:
+                    upgrade.draw(self.screen)
+                for enemy in self.enemies:
+                    enemy.draw(self.screen)
+                self.player.draw(self.screen)
+                self.draw_ui()
+                if self.message:
+                    self.draw_message(self.message)
+                pygame.display.flip()
 
     def draw_ui(self) -> None:
         # Health bar background
@@ -833,6 +942,114 @@ class Game:
         message = f"{title}\nTime: {time_str}  Kills: {self.kills}"
         # Show for longer to allow players to read
         self.show_message(message, duration=6.0)
+
+    # ------------------------------------------------------------------
+    # High score and menu helpers
+    def load_highscore(self) -> Dict[str, Optional[int]]:
+        """
+        Read the high score file from disk.  If the file does not exist or is
+        malformed, return default values.  The returned dictionary has two
+        keys: 'best_time' (milliseconds) and 'best_kills' (integer).
+        """
+        try:
+            with open(HIGHSCORE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return {
+                        'best_time': data.get('best_time'),
+                        'best_kills': data.get('best_kills'),
+                    }
+        except FileNotFoundError:
+            pass
+        except Exception:
+            # ignore parse errors and fall through to default
+            pass
+        return {'best_time': None, 'best_kills': None}
+
+    def save_highscore(self, elapsed_ms: int, kills: int) -> None:
+        """
+        Update the high score if the new time is faster or the kills count is
+        higher.  Persist to disk.  The elapsed time is in milliseconds.
+        """
+        updated = False
+        # Compare by time: lower is better.  Only consider victories (kills
+        # greater than zero).  If no best_time recorded yet, any value qualifies.
+        best_time = self.highscore.get('best_time')
+        best_kills = self.highscore.get('best_kills')
+        # Update time if this run is faster or if no time exists yet
+        if kills > 0:
+            if best_time is None or elapsed_ms < best_time:
+                self.highscore['best_time'] = elapsed_ms
+                updated = True
+        # Update kills if this run achieves more kills (regardless of victory)
+        if best_kills is None or kills > best_kills:
+            self.highscore['best_kills'] = kills
+            updated = True
+        # Write out if there was an update
+        if updated:
+            try:
+                with open(HIGHSCORE_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(self.highscore, f)
+            except Exception:
+                # If writing fails, ignore errors but keep highscore in memory
+                pass
+
+    def reset_game(self) -> None:
+        """
+        Reset all game state for a new run.  This method is called when
+        starting a game from the menu or after a game over when the player
+        chooses to play again.
+        """
+        # Create a fresh dungeon and reset the current room
+        self.dungeon = Dungeon(ROOM_COUNT)
+        self.current_room_index = 0
+        # Create a new player in the centre of the screen
+        self.player = Player(SCREEN_WIDTH / 2 - 16, SCREEN_HEIGHT / 2 - 24, self.player_frames)
+        # Reset room entities lists
+        self.enemies = []
+        self.potions = []
+        self.upgrades = []
+        # UI state
+        self.message = None
+        self.message_timer = 0.0
+        self.game_over = False
+        # Score tracking
+        self.start_time = pygame.time.get_ticks()
+        self.kills = 0
+        # Load the first room's contents
+        self.load_room(0)
+        # Mark that we haven't saved the score for this run yet
+        self.saved_score = False
+
+    def draw_menu(self) -> None:
+        """Render the start menu with title and high score information."""
+        self.screen.fill(COLOR_BG)
+        title_font = pygame.font.Font(None, 64)
+        text_font = pygame.font.Font(None, 32)
+        # Title
+        title_surface = title_font.render("Rogue‑Lite POC", True, (255, 255, 255))
+        title_rect = title_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 3))
+        self.screen.blit(title_surface, title_rect)
+        # Instructions
+        instr_surface = text_font.render("Press Enter to start", True, (200, 200, 200))
+        instr_rect = instr_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
+        self.screen.blit(instr_surface, instr_rect)
+        # High score display
+        best_time = self.highscore.get('best_time')
+        best_kills = self.highscore.get('best_kills')
+        # Format time as mm:ss
+        if best_time is not None:
+            total_seconds = best_time // 1000
+            minutes, seconds = divmod(total_seconds, 60)
+            time_str = f"{minutes}:{seconds:02d}"
+        else:
+            time_str = "--:--"
+        kills_str = str(best_kills) if best_kills is not None else "--"
+        hs_text = f"Best Time: {time_str}   Best Kills: {kills_str}"
+        hs_surface = text_font.render(hs_text, True, (180, 180, 180))
+        hs_rect = hs_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 40))
+        self.screen.blit(hs_surface, hs_rect)
+        pygame.display.flip()
 
 
 if __name__ == '__main__':

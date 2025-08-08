@@ -114,7 +114,10 @@ export class BootScene extends Phaser.Scene {
     });
 
     // When the assets and animations are ready, move immediately to the
-    // dungeon scene.
+    // dungeon scene and launch the UI scene. Using `launch` keeps both
+    // scenes active simultaneously so the HUD (hearts, enemy count) is
+    // rendered on top of the game.
     this.scene.start('DungeonScene');
+    this.scene.launch('UIScene');
   }
 }

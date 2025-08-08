@@ -25,6 +25,13 @@ export class DungeonScene extends Phaser.Scene {
     // Set camera to follow the player
     this.cameras.main.startFollow(this.player);
 
+    // Create a crosshair sprite for aiming feedback. It will follow the
+    // mouse pointer when the button is held down. We set a high depth so
+    // it renders above other objects.
+    this.crosshair = this.add.image(0, 0, 'crosshair');
+    this.crosshair.setDepth(25);
+    this.crosshair.setVisible(false);
+
     // Define rooms for the POC
     // Each room has a spawn function invoked on first entry
     this.rooms = [
@@ -147,5 +154,19 @@ export class DungeonScene extends Phaser.Scene {
     this.enemies.getChildren().forEach((enemy) => {
       enemy.update(this.player);
     });
+
+    // Crosshair visibility and position: show the crosshair when the left
+    // mouse button is held down. Position it at the pointer’s world
+    // coordinates so that it follows the cursor across the scene. Hide
+    // otherwise.
+    const pointer = this.input.activePointer;
+    if (pointer.isDown) {
+      this.crosshair.setVisible(true);
+      // Convert pointer position to world coordinates accounting for camera
+      const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+      this.crosshair.setPosition(worldPoint.x, worldPoint.y);
+    } else {
+      this.crosshair.setVisible(false);
+    }
   }
 }

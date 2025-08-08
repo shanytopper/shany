@@ -45,6 +45,36 @@ export class BootScene extends Phaser.Scene {
       palette: { '5': '#444444', '6': '#888888' },
     });
 
+    // Generate a simple heart icon for the UI. We use spaces for
+    // transparency; only '1' pixels will be rendered. This creates a
+    // stylised heart shape roughly 6x5 pixels tall.
+    this.textures.generate('heart', {
+      data: [
+        '  11  ',
+        ' 1111 ',
+        '111111',
+        ' 1111 ',
+        '  11  ',
+      ],
+      pixelWidth: 1,
+      pixelHeight: 1,
+      palette: { '1': '#ff5555' },
+    });
+
+    // Generate a simple crosshair icon for aiming. Spaces are transparent.
+    this.textures.generate('crosshair', {
+      data: [
+        ' 1 1 ',
+        '     ',
+        '11111',
+        '     ',
+        ' 1 1 ',
+      ],
+      pixelWidth: 1,
+      pixelHeight: 1,
+      palette: { '1': '#ffffff' },
+    });
+
     // Define animations for the player. The spritesheet has four rows of
     // animations: row 0 (frames 0-2) faces down, row 1 (frames 3-5) faces up,
     // row 2 (frames 6-8) faces left, and row 3 (frames 9-11) faces right.

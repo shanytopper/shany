@@ -89,6 +89,20 @@ TURRET_PROBABILITY: float = 0.15
 # persisted in a JSON file so that subsequent sessions can display and update it.
 HIGHSCORE_FILE: str = os.path.join(os.path.dirname(__file__), 'highscore.json')
 
+# Splitter enemy parameters.  Splitter enemies split into smaller mini enemies upon
+# death.  The probability controls how often they spawn in place of a normal
+# enemy, and the mini enemy stats define their health and speed.
+SPLITTER_PROBABILITY: float = 0.15
+MINI_ENEMY_HEALTH: int = 10
+MINI_ENEMY_SPEED: float = ENEMY_SPEED * 1.3
+
+# Bomb parameters.  Bombs are obtained via upgrades and can be deployed by
+# pressing the 'B' key.  After a short fuse they explode, dealing area‑of‑effect
+# damage to all enemies within the given radius.
+BOMB_FUSE_MS: int = 1000
+BOMB_RADIUS: float = 80.0
+BOMB_DAMAGE: int = 40
+
 # Upgrade definitions.  When a room (except the last) is cleared, an upgrade
 # spawns.  The upgrade chosen randomly from this set will modify the player
 # stat indicated by the provided lambda.
@@ -101,6 +115,9 @@ UPGRADE_TYPES = {
     'Spread Shot': lambda p: setattr(p, 'bullet_count', min(5, p.bullet_count + 2)),
     # Grant a protective shield that absorbs one incoming hit.
     'Shield': lambda p: setattr(p, 'shield', p.shield + 1),
+    # Grant the player an additional bomb.  Bombs can be deployed with the 'B'
+    # key and explode after a short fuse, damaging nearby enemies.
+    'Bomb': lambda p: setattr(p, 'bombs', p.bombs + 1),
 }
 
 
@@ -252,6 +269,8 @@ class Player(Entity):
         self.bullet_count: int = 1
         # Shield points; each point absorbs one hit from enemies or bullets
         self.shield: int = 0
+        # Number of bombs available; bombs can be planted with the 'B' key
+        self.bombs: int = 0
 
 
     def handle_input(self, keys: pygame.key.ScancodeWrapper, dt: float) -> None:
@@ -496,6 +515,47 @@ class TurretEnemy(Entity):
             b.draw(surface)
 
 
+class MiniEnemy(Enemy):
+    """Small enemy spawned by a SplitterEnemy.  Moves quickly and has low health."""
+    def __init__(self, x: float, y: float) -> None:
+        super().__init__(x, y)
+        # Smaller size than normal enemies
+        self.rect = pygame.Rect(x, y, 24, 24)
+        self.max_health = MINI_ENEMY_HEALTH
+        self.health = MINI_ENEMY_HEALTH
+        # Faster movement
+        self.speed = MINI_ENEMY_SPEED
+
+    def draw(self, surface: pygame.Surface) -> None:
+        # Distinguish mini enemies by colour
+        pygame.draw.rect(surface, (120, 200, 80), self.rect)
+
+
+class SplitterEnemy(Enemy):
+    """Enemy that splits into two mini enemies upon death."""
+    def __init__(self, x: float, y: float) -> None:
+        super().__init__(x, y)
+        # Different colour to distinguish splitter
+        self.color = (180, 120, 40)
+
+    def draw(self, surface: pygame.Surface) -> None:
+        pygame.draw.rect(surface, self.color, self.rect)
+
+    def split(self) -> List[MiniEnemy]:
+        """
+        Create two MiniEnemy instances near the splitter's position.  Offsets are
+        applied to prevent overlapping.  Returns the list of new enemies.
+        """
+        minis: List[MiniEnemy] = []
+        for _ in range(2):
+            offset_x = rand_int(-30, 30)
+            offset_y = rand_int(-30, 30)
+            mx = max(16, min(SCREEN_WIDTH - 16, self.rect.centerx + offset_x))
+            my = max(16, min(SCREEN_HEIGHT - 16, self.rect.centery + offset_y))
+            minis.append(MiniEnemy(mx - 12, my - 12))
+        return minis
+
+
 class Potion:
     """Collectible potion that heals the player."""
     def __init__(self, x: float, y: float) -> None:
@@ -526,6 +586,28 @@ class Upgrade:
         if not self.collected:
             # simple blue square for upgrades
             pygame.draw.rect(surface, (50, 150, 200), self.rect)
+
+
+class Bomb:
+    """A planted bomb that explodes after a fuse and damages nearby enemies."""
+    def __init__(self, x: float, y: float) -> None:
+        self.pos = pygame.Vector2(x, y)
+        self.timer_ms: float = BOMB_FUSE_MS
+        self.exploded: bool = False
+        self.alive: bool = True
+
+    def update(self, dt: float) -> None:
+        if not self.exploded:
+            self.timer_ms -= dt * 1000.0
+            if self.timer_ms <= 0.0:
+                self.exploded = True
+                self.alive = False
+
+    def draw(self, surface: pygame.Surface) -> None:
+        # Draw a simple bomb as a grey circle; if exploded, draw nothing (explosion
+        # effect handled elsewhere)
+        if not self.exploded:
+            pygame.draw.circle(surface, (100, 100, 100), (int(self.pos.x), int(self.pos.y)), 6)
 
 
 class BossEnemy(Enemy):
@@ -653,12 +735,13 @@ class Game:
                 x = rand_int(60, SCREEN_WIDTH - 60)
                 y = rand_int(60, SCREEN_HEIGHT - 60)
                 r = random.random()
-                # Spawn a turret with probability TURRET_PROBABILITY, otherwise choose between
-                # ranged and melee enemies.  Turrets are stationary but dangerous thanks
-                # to their 8‑direction bullet patterns.
-                if r < TURRET_PROBABILITY:
+                # Spawn Splitter, Turret, Ranged or Melee enemies based on probabilities.
+                # Note: probabilities sum to less than 1; remaining share goes to melee.
+                if r < SPLITTER_PROBABILITY:
+                    self.enemies.append(SplitterEnemy(x, y))
+                elif r < SPLITTER_PROBABILITY + TURRET_PROBABILITY:
                     self.enemies.append(TurretEnemy(x, y))
-                elif r < TURRET_PROBABILITY + 0.30:
+                elif r < SPLITTER_PROBABILITY + TURRET_PROBABILITY + 0.30:
                     self.enemies.append(RangedEnemy(x, y))
                 else:
                     self.enemies.append(Enemy(x, y))
@@ -683,11 +766,20 @@ class Game:
         """
         while True:
             dt = self.clock.tick(60) / 1000.0  # delta time in seconds
-            # Handle system events (quit)
+            # Handle events (quit, key presses)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     sys.exit()
+                # Handle bomb planting only during gameplay
+                if event.type == pygame.KEYDOWN and self.state == 'GAME':
+                    if event.key == pygame.K_b:
+                        # Plant a bomb if available
+                        if self.player.bombs > 0:
+                            cx = self.player.rect.centerx
+                            cy = self.player.rect.centery
+                            self.bombs.append(Bomb(cx, cy))
+                            self.player.bombs -= 1
             keys = pygame.key.get_pressed()
 
             # --- Menu state ---
@@ -773,11 +865,38 @@ class Game:
                         if not upgrade.collected and self.player.rect.colliderect(upgrade.rect):
                             upgrade.apply(self.player)
                             self.show_message(f"Picked up {upgrade.name}!", duration=3.0)
-                    # Remove dead enemies and count kills
-                    enemies_before = len(self.enemies)
-                    self.enemies = [e for e in self.enemies if e.alive]
-                    kills_this_frame = max(0, enemies_before - len(self.enemies))
-                    self.kills += kills_this_frame
+
+                    # Update bombs and handle explosions
+                    # Track bombs that explode during this frame
+                    for bomb in list(self.bombs):
+                        pre_exploded = bomb.exploded
+                        bomb.update(dt)
+                        if not pre_exploded and bomb.exploded:
+                            # Bomb just exploded: damage all enemies within radius
+                            for enemy in self.enemies:
+                                if enemy.alive:
+                                    dist = math.hypot(bomb.pos.x - enemy.rect.centerx, bomb.pos.y - enemy.rect.centery)
+                                    if dist <= BOMB_RADIUS:
+                                        enemy.damage(BOMB_DAMAGE)
+                            # Show explosion message
+                            self.show_message("Boom!", duration=1.0)
+                    # Remove bombs that have exploded
+                    self.bombs = [b for b in self.bombs if not b.exploded]
+                    # Remove dead enemies, spawn splits and count kills
+                    dead_count = 0
+                    survivors: List[Enemy] = []
+                    spawned_minis: List[Enemy] = []
+                    for enemy in self.enemies:
+                        if enemy.alive:
+                            survivors.append(enemy)
+                        else:
+                            dead_count += 1
+                            if isinstance(enemy, SplitterEnemy):
+                                spawned_minis.extend(enemy.split())
+                    # Update enemy list: survivors plus newly spawned minis
+                    self.enemies = survivors + spawned_minis
+                    # Increment kill counter by number of dead enemies (splitting does not affect kills)
+                    self.kills += dead_count
                     # Check room cleared
                     if enemies_before > 0 and not self.enemies and not self.dungeon.get_room(self.current_room_index).cleared:
                         self.dungeon.get_room(self.current_room_index).cleared = True
@@ -835,6 +954,9 @@ class Game:
                     potion.draw(self.screen)
                 for upgrade in self.upgrades:
                     upgrade.draw(self.screen)
+                # Draw bombs
+                for bomb in self.bombs:
+                    bomb.draw(self.screen)
                 for enemy in self.enemies:
                     enemy.draw(self.screen)
                 self.player.draw(self.screen)
@@ -883,6 +1005,8 @@ class Game:
                     potion.draw(self.screen)
                 for upgrade in self.upgrades:
                     upgrade.draw(self.screen)
+                for bomb in self.bombs:
+                    bomb.draw(self.screen)
                 for enemy in self.enemies:
                     enemy.draw(self.screen)
                 self.player.draw(self.screen)
@@ -1020,6 +1144,8 @@ class Game:
         self.load_room(0)
         # Mark that we haven't saved the score for this run yet
         self.saved_score = False
+        # Reset bombs
+        self.bombs: List[Bomb] = []
 
     def draw_menu(self) -> None:
         """Render the start menu with title and high score information."""

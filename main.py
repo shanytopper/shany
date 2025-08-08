@@ -795,6 +795,8 @@ class Game:
             # --- Game state ---
             if self.state == 'GAME':
                 if not self.game_over:
+                    # Track whether there were any enemies at the start of this update
+                    had_enemies = len(self.enemies) > 0
                     # Update player
                     self.player.handle_input(keys, dt)
                     self.player.update(dt)
@@ -898,7 +900,7 @@ class Game:
                     # Increment kill counter by number of dead enemies (splitting does not affect kills)
                     self.kills += dead_count
                     # Check room cleared
-                    if enemies_before > 0 and not self.enemies and not self.dungeon.get_room(self.current_room_index).cleared:
+                    if had_enemies and not self.enemies and not self.dungeon.get_room(self.current_room_index).cleared:
                         self.dungeon.get_room(self.current_room_index).cleared = True
                         if self.current_room_index != ROOM_COUNT - 1:
                             name, effect = random.choice(list(UPGRADE_TYPES.items()))

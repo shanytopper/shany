@@ -80,6 +80,13 @@ SLIME_SHEET_FILE: str = os.path.join(ASSETS_DIR, 'slime_spritesheet.png')
 POTION_SET_FILE: str = os.path.join(ASSETS_DIR, 'potion_set_16x16.png')
 COIN_STRIP_FILE: str = os.path.join(ASSETS_DIR, 'coin_strip.png')
 BOMB_ICON_FILE: str = os.path.join(ASSETS_DIR, 'bomb.png')
+# Directories for additional character animations used for enemies.  The
+# skeleton and monster folders contain jump/walk animations that will be
+# assigned to different enemy types for visual variety.  The files within
+# these directories follow the same naming convention as HERO_DIR and are
+# loaded using ``load_hero_frames``.
+SKELETON_DIR: str = os.path.join(ASSETS_DIR, 'skeleton')
+MONSTER_DIR: str = os.path.join(ASSETS_DIR, 'monster')
 
 # Directory containing 8‑direction hero animations.  This folder
 # contains individual PNG files for the player's jump/walk animation
@@ -1195,6 +1202,14 @@ class Game:
         # remains playable even if the external hero assets are missing.
         if not any(self.player_frames.values()):
             self.player_frames = self.load_hero_frames(os.path.join(os.path.dirname(__file__), 'hero.png'))
+
+        # Load enemy character animations.  We load skeleton and monster
+        # animations from their respective directories.  These will be used
+        # for different enemy types to provide distinct appearances.  If
+        # the directories are empty or missing, the returned mappings may
+        # contain empty lists, and fallback coloured rectangles will be used.
+        self.skeleton_frames: Dict[int, List[pygame.Surface]] = load_hero_frames(SKELETON_DIR)
+        self.monster_frames: Dict[int, List[pygame.Surface]] = load_hero_frames(MONSTER_DIR)
         # Load enemy and item sprite frames.  These functions must be called
         # after ``pygame.init()`` so that Pygame surfaces are initialised.
         # Enemy frames: dictionary mapping colour names to a list of walking frames.
@@ -1984,21 +1999,65 @@ class Game:
         # Do not override frames if already assigned (e.g. custom boss)
         if getattr(enemy, 'anim_frames', None):
             return
+
+        def tint_frames(src_frames: List[pygame.Surface], colour: Tuple[int, int, int]) -> List[pygame.Surface]:
+            """
+            Create tinted copies of the given frames using the provided RGB
+            colour.  Alpha values are preserved.  Uses ``BLEND_RGBA_MULT`` to
+            multiply the frame pixels by the tint colour.
+            """
+            tinted: List[pygame.Surface] = []
+            for f in src_frames:
+                surf = f.copy()
+                # Create a surface of the same size filled with the tint colour
+                tint_surf = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
+                tint_surf.fill(colour)
+                surf.blit(tint_surf, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+                tinted.append(surf)
+            return tinted
+
         frames: Optional[List[pygame.Surface]] = None
-        # Determine the colour set based on enemy type
+        # Assign frames based on enemy type.  Use skeleton frames for
+        # melee‑oriented enemies and monster frames for ranged and special
+        # behaviours.  Apply distinct tint colours to differentiate each
+        # behaviour.  If skeleton/monster frames are unavailable, fall back
+        # to slime frames.
         if isinstance(enemy, MiniEnemy):
-            base = self.slime_frames.get('red')
+            # Mini enemies use skeleton frames tinted bright red
+            base = self.skeleton_frames.get(DOWN) or []
             if base:
-                frames = [pygame.transform.scale(f, (enemy.rect.width, enemy.rect.height)) for f in base]
+                frames = tint_frames(base, (255, 80, 80))
         elif isinstance(enemy, SplitterEnemy):
-            frames = self.slime_frames.get('red')
+            base = self.skeleton_frames.get(DOWN) or []
+            if base:
+                frames = tint_frames(base, (220, 100, 50))
         elif isinstance(enemy, RangedEnemy):
-            frames = self.slime_frames.get('blue')
-        elif isinstance(enemy, TurretEnemy) or isinstance(enemy, TeleporterEnemy):
-            frames = self.slime_frames.get('yellow')
+            base = self.monster_frames.get(DOWN) or []
+            if base:
+                frames = tint_frames(base, (80, 80, 255))
+        elif isinstance(enemy, TurretEnemy):
+            base = self.monster_frames.get(DOWN) or []
+            if base:
+                frames = tint_frames(base, (200, 120, 40))
+        elif isinstance(enemy, TeleporterEnemy):
+            base = self.monster_frames.get(DOWN) or []
+            if base:
+                frames = tint_frames(base, (60, 180, 200))
         elif isinstance(enemy, Enemy):
-            frames = self.slime_frames.get('green')
-        # Apply frames if available
+            base = self.skeleton_frames.get(DOWN) or []
+            if base:
+                frames = tint_frames(base, (100, 200, 100))
+        # Fallback to slime frames if no skeleton/monster frames found
+        if frames is None:
+            # Determine fallback colour set based on enemy type
+            if isinstance(enemy, MiniEnemy) or isinstance(enemy, SplitterEnemy):
+                frames = self.slime_frames.get('red')
+            elif isinstance(enemy, RangedEnemy):
+                frames = self.slime_frames.get('blue')
+            elif isinstance(enemy, TurretEnemy) or isinstance(enemy, TeleporterEnemy):
+                frames = self.slime_frames.get('yellow')
+            else:
+                frames = self.slime_frames.get('green')
         if frames:
             enemy.anim_frames = frames
             enemy.frame_index = 0

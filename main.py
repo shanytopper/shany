@@ -68,6 +68,12 @@ COLOR_HEALTH_FG_WARN = (204, 204, 0)
 COLOR_HEALTH_FG_BAD = (170, 0, 0)
 COLOR_POTION = (0, 255, 136)
 
+# Cooldowns and durations (ms)
+DASH_COOLDOWN_MS: int = 600
+DASH_DURATION_MS: int = 150
+DASH_MULTIPLIER: float = 3.0
+
+
 
 # -----------------------------------------------------------------------------
 # Utility functions
@@ -104,26 +110,49 @@ class Dungeon:
         self._create_connections()
 
     def _create_connections(self) -> None:
+        """
+        Create a random yet fully connected dungeon.  Each room (except the
+        initial one) connects back to a random previously created room.  To
+        introduce branching, additional connections are added with a certain
+        probability.  Direction assignments avoid conflicting with existing
+        connections on either room.  The resulting graph is a tree with extra
+        edges, guaranteeing that every room is reachable from the start.
+        """
         dirs = [UP, DOWN, LEFT, RIGHT]
-        for i in range(len(self.rooms) - 1):
-            # assign a connection between room i and i+1 via a random available direction
-            available = dirs.copy()
-            random.shuffle(available)
-            connected = False
-            for d in available:
-                if d in self.rooms[i].neighbors:
-                    continue
+        # Keep track of used directions per room
+        for i in range(1, len(self.rooms)):
+            # select a random previous room to connect to ensure connectivity
+            target = random.randint(0, i - 1)
+            self._connect_rooms(i, target, dirs)
+            # with some probability add another branch to create loops
+            if random.random() < 0.3 and i > 1:
+                other = random.randint(0, i - 1)
+                if other != target:
+                    self._connect_rooms(i, other, dirs)
+
+    def _connect_rooms(self, i: int, target: int, dirs: List[int]) -> None:
+        """Connect room i with room `target` if possible using a free direction."""
+        available = dirs.copy()
+        random.shuffle(available)
+        for d in available:
+            if d in self.rooms[target].neighbors:
+                continue
+            opp = opposite_direction(d)
+            if opp in self.rooms[i].neighbors:
+                continue
+            # connect target -> i
+            self.rooms[target].neighbors[d] = i
+            self.rooms[i].neighbors[opp] = target
+            return
+        # If no direction was free on either room, force a connection by overwriting an unused direction.
+        for d in dirs:
+            if d not in self.rooms[target].neighbors:
                 opp = opposite_direction(d)
-                if opp in self.rooms[i + 1].neighbors:
-                    continue
-                self.rooms[i].neighbors[d] = i + 1
-                self.rooms[i + 1].neighbors[opp] = i
-                connected = True
-                break
-            if not connected:
-                # fallback to RIGHT/LEFT
-                self.rooms[i].neighbors[RIGHT] = i + 1
-                self.rooms[i + 1].neighbors[LEFT] = i
+                # remove any existing connection on this side
+                # but we don't remove opposite's previous neighbor to avoid breaking existing graph
+                self.rooms[target].neighbors[d] = i
+                self.rooms[i].neighbors[opp] = target
+                return
 
     def get_room(self, index: int) -> Room:
         return self.rooms[index]
@@ -173,6 +202,12 @@ class Player(Entity):
         self.last_shot_time: float = 0.0
         self.bullets: List[Bullet] = []
 
+        # Dash mechanics
+        self.dash_time_remaining: float = 0.0  # ms remaining in current dash
+        self.last_dash_time: float = 0.0
+        self.invulnerable: bool = False
+
+
     def handle_input(self, keys: pygame.key.ScancodeWrapper, dt: float) -> None:
         self.vel.update(0, 0)
         moving = False
@@ -195,6 +230,9 @@ class Player(Entity):
         # Normalize diagonal movement
         if self.vel.length_squared() > 0:
             self.vel = self.vel.normalize() * self.speed
+            # Apply dash multiplier if currently dashing
+            if self.dash_time_remaining > 0:
+                self.vel *= DASH_MULTIPLIER
         # Update last direction if moving
         if moving:
             self.last_direction = self.direction
@@ -213,6 +251,14 @@ class Player(Entity):
                 self.last_shot_time = now
                 direction = self.last_direction
                 self.shoot(direction)
+
+        # Dash (shift) mechanics
+        if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
+            # Initiate dash if cooldown elapsed
+            if now - self.last_dash_time >= DASH_COOLDOWN_MS and self.dash_time_remaining <= 0:
+                self.last_dash_time = now
+                self.dash_time_remaining = DASH_DURATION_MS
+                self.invulnerable = True
 
     def shoot(self, direction: int) -> None:
         # Start bullet at centre of player
@@ -239,6 +285,15 @@ class Player(Entity):
             bullet.update(dt)
         # Remove inactive bullets
         self.bullets = [b for b in self.bullets if b.alive]
+
+        # Handle dash timing.  When dashing, multiply velocity; once expired,
+        # remove invulnerability.  dt is in seconds so convert to ms.
+        if self.dash_time_remaining > 0:
+            self.dash_time_remaining -= dt * 1000.0
+            # Increase speed while dashing (applied in handle_input for this frame)
+        else:
+            if self.invulnerable:
+                self.invulnerable = False
 
     def draw(self, surface: pygame.Surface) -> None:
         # Draw player sprite
@@ -270,6 +325,18 @@ class Bullet:
             pygame.draw.circle(surface, COLOR_BULLET, (int(self.pos.x), int(self.pos.y)), self.radius)
 
 
+class EnemyBullet(Bullet):
+    """Projectiles fired by enemies toward the player."""
+    def __init__(self, x: float, y: float, vx: float, vy: float) -> None:
+        super().__init__(x, y, vx, vy)
+        self.radius = 5
+        self.damage = 10
+
+    def draw(self, surface: pygame.Surface) -> None:
+        if self.alive:
+            pygame.draw.circle(surface, COLOR_ENEMY, (int(self.pos.x), int(self.pos.y)), self.radius)
+
+
 class Enemy(Entity):
     """Simple enemy that chases the player."""
     def __init__(self, x: float, y: float) -> None:
@@ -292,6 +359,47 @@ class Enemy(Entity):
 
     def draw(self, surface: pygame.Surface) -> None:
         pygame.draw.rect(surface, COLOR_ENEMY, self.rect)
+
+
+class RangedEnemy(Enemy):
+    """Enemy that chases the player and occasionally fires projectiles."""
+    def __init__(self, x: float, y: float) -> None:
+        super().__init__(x, y)
+        self.cooldown_ms: int = 1500
+        self.last_shot_time: float = 0.0
+        # slightly slower
+        self.speed = ENEMY_SPEED * 0.6
+        # store bullets
+        self.bullets: List[EnemyBullet] = []
+
+    def update(self, dt: float, player: Player) -> None:
+        # Move like a normal enemy
+        super().update(dt, player)
+        # Fire at intervals
+        now = pygame.time.get_ticks()
+        if now - self.last_shot_time >= self.cooldown_ms:
+            self.last_shot_time = now
+            # compute direction to player
+            dx = player.rect.centerx - self.rect.centerx
+            dy = player.rect.centery - self.rect.centery
+            dist = math.hypot(dx, dy)
+            if dist > 0:
+                vx = (dx / dist) * BULLET_SPEED * 0.6
+                vy = (dy / dist) * BULLET_SPEED * 0.6
+                bullet = EnemyBullet(self.rect.centerx, self.rect.centery, vx, vy)
+                self.bullets.append(bullet)
+        # update bullets
+        for b in self.bullets:
+            b.update(dt)
+        # remove dead bullets
+        self.bullets = [b for b in self.bullets if b.alive]
+
+    def draw(self, surface: pygame.Surface) -> None:
+        # draw body
+        pygame.draw.rect(surface, (100, 40, 140), self.rect)
+        # draw bullets
+        for b in self.bullets:
+            b.draw(surface)
 
 
 class Potion:
@@ -359,7 +467,11 @@ class Game:
         for _ in range(room.enemy_count):
             x = rand_int(60, SCREEN_WIDTH - 60)
             y = rand_int(60, SCREEN_HEIGHT - 60)
-            self.enemies.append(Enemy(x, y))
+            # 30% chance of ranged enemy
+            if random.random() < 0.3:
+                self.enemies.append(RangedEnemy(x, y))
+            else:
+                self.enemies.append(Enemy(x, y))
         # Spawn potion
         if room.has_potion:
             x = rand_int(60, SCREEN_WIDTH - 60)
@@ -394,17 +506,30 @@ class Game:
                         if enemy.alive and bullet.alive and enemy.rect.collidepoint(bullet.pos):
                             enemy.damage(bullet.damage)
                             bullet.alive = False
-                # Enemy vs player collisions
+                # Enemy vs player collisions (melee)
                 for enemy in self.enemies:
                     if enemy.alive and self.player.rect.colliderect(enemy.rect):
-                        # damage player and knock enemy slightly
-                        self.player.damage(10)
+                        # damage only if not invulnerable (e.g. during dash)
+                        if not self.player.invulnerable:
+                            self.player.damage(10)
                         # simple knockback: push enemy away from player
                         dx = enemy.rect.centerx - self.player.rect.centerx
                         dy = enemy.rect.centery - self.player.rect.centery
                         dist = max(math.hypot(dx, dy), 0.1)
                         enemy.rect.x += int((dx / dist) * 20)
                         enemy.rect.y += int((dy / dist) * 20)
+
+                # Enemy bullet collisions
+                # Collect all enemy bullets into a single list for checking
+                enemy_bullets: List[EnemyBullet] = []
+                for e in self.enemies:
+                    if isinstance(e, RangedEnemy):
+                        enemy_bullets.extend(e.bullets)
+                for b in enemy_bullets:
+                    if b.alive and self.player.rect.collidepoint(b.pos):
+                        if not self.player.invulnerable:
+                            self.player.damage(b.damage)
+                        b.alive = False
                 # Potion pickup
                 for potion in self.potions:
                     if not potion.collected and self.player.rect.colliderect(potion.rect):

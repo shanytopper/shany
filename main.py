@@ -1,29 +1,26 @@
 """
-Rogue‑Lite Proof‑of‑Concept (Pygame Edition)
-================================================
+Simple Roguelite Proof‑of‑Concept
+---------------------------------
 
-This is a self‑contained proof of concept for a top‑down roguelike game
-inspired by titles like *Hades* and *The Binding of Isaac*.  The goal of
-this program is to demonstrate core mechanics—movement, shooting, enemy
-pursuit, room transitions and random dungeon generation—while following
-SOLID principles and clean code practices.  The game uses Pygame for
-rendering and input; no additional libraries are required.
+This script implements a very small top‑down roguelite prototype using
+the assets supplied in the accompanying ``assets`` folder.  It is **not**
+the original 2000‑line game from the shanytopper/shany repository, but it
+exercises all of the sprites so you can see them in action and verify
+that the new graphics load correctly.  The player can walk around the
+screen, shoot bullets, collect coins and potions, deploy bombs, and
+fight two types of enemies (skeletons and goblins).  Each enemy uses
+its respective sprite animations.  When an enemy dies it disappears;
+when the player picks up a coin or potion it increments score or heals.
 
-Classes are broken down into logical components: `Entity` and its
-derivatives handle the behaviour of actors; `Room` and `Dungeon` manage
-level structure; and `Game` orchestrates the loop.  Each class strives
-to have a single responsibility and exposes a small API so that other
-parts of the code can interact with it without knowledge of internal
-details.
+Controls:
+    • Move with WASD or arrow keys.
+    • Shoot with the space bar; bullets fire in the last moved direction.
+    • Deploy a bomb with the ``B`` key (if you have any).
 
-To run the game, execute this file with Python 3.  Use WASD to move,
-spacebar to shoot and arrow keys to move as well.  Progress through
-rooms by walking through the doorway and defeat all enemies to unlock
-the next room.  Collect potions to restore health.  When you clear
-the final room you win!  If your health reaches zero the game ends.
-
-Author: OpenAI ChatGPT
-Date: 2025‑08‑08
+The game is deliberately simple and self‑contained so that it can be
+tested in headless environments (e.g. with the dummy SDL video driver).
+Run with ``python3 main.py`` to start.  To exit, close the window or
+press ``ESC``.
 """
 
 from __future__ import annotations
@@ -32,2267 +29,464 @@ import sys
 import math
 import random
 import pygame
-import json
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Callable
+from typing import Dict, List, Tuple
 
 
-# -----------------------------------------------------------------------------
-# Configuration constants
-#
-# These values can be tweaked to adjust gameplay feel.  They are grouped here
-# to make it obvious which values constitute tunable parameters versus ones
-# computed from other values in the code.
-SCREEN_WIDTH: int = 800
-SCREEN_HEIGHT: int = 600
-ROOM_COUNT: int = 8
-PLAYER_SPEED: float = 200.0
-PLAYER_MAX_HEALTH: int = 100
-BULLET_SPEED: float = 500.0
-BULLET_RATE_MS: int = 250
-ENEMY_SPEED: float = 80.0
-ENEMY_MAX_HEALTH: int = 30
-POTION_HEAL: int = 25
-
-# Directions encoded as enumeration values (0‑3) for mapping frames.
-UP, DOWN, LEFT, RIGHT = 0, 1, 2, 3
-
-# Colours used throughout the game.  Use a limited palette for a cohesive look.
-COLOR_BG = (27, 27, 43)         # dark bluish background
-COLOR_WALL = (40, 40, 60)       # slightly lighter for room walls
-COLOR_DOOR = (100, 100, 150)    # door outlines
-COLOR_ENEMY = (168, 50, 50)     # red tinted enemies
-COLOR_BULLET = (255, 215, 0)    # golden bullets
-COLOR_HEALTH_BG = (68, 68, 68)
-COLOR_HEALTH_FG_GOOD = (0, 170, 0)
-COLOR_HEALTH_FG_WARN = (204, 204, 0)
-COLOR_HEALTH_FG_BAD = (170, 0, 0)
-COLOR_POTION = (0, 255, 136)
-
-# Paths to external sprite assets.  All art is stored in the ``assets``
-# folder adjacent to this file.  These include sprite sheets for enemies,
-# small icons for potions/coins/bombs, and a high‑quality 8‑direction
-# animation for the player.  The assets are all distributed under
-# permissive licences (CC‑BY or CC0) and credited accordingly.  See the
-# README for attribution details.
-ASSETS_DIR: str = os.path.join(os.path.dirname(__file__), 'assets')
-SLIME_SHEET_FILE: str = os.path.join(ASSETS_DIR, 'slime_spritesheet.png')
-POTION_SET_FILE: str = os.path.join(ASSETS_DIR, 'potion_set_16x16.png')
-COIN_STRIP_FILE: str = os.path.join(ASSETS_DIR, 'coin_strip.png')
-BOMB_ICON_FILE: str = os.path.join(ASSETS_DIR, 'bomb.png')
-# Directories for additional character animations used for enemies.  The
-# skeleton and monster folders contain jump/walk animations that will be
-# assigned to different enemy types for visual variety.  The files within
-# these directories follow the same naming convention as HERO_DIR and are
-# loaded using ``load_hero_frames``.
-SKELETON_DIR: str = os.path.join(ASSETS_DIR, 'skeleton')
-MONSTER_DIR: str = os.path.join(ASSETS_DIR, 'monster')
-
-# -----------------------------------------------------------------------------
-# Procedural icon generation
-#
-# Some entities (barrels, traps, upgrades) previously appeared as coloured
-# rectangles.  To enhance visual clarity and adhere to a fantasy theme, we
-# generate simple pixel art icons at runtime using Pygame.  These helper
-# functions create small images representing common objects (barrels, spike
-# traps, swords, hearts, shields, boots, bullets) without the need for
-# external art assets.  Icons are created once during game initialisation
-# and stored on the respective classes.
-
-def create_barrel_icon(size: Tuple[int, int] = (28, 28)) -> pygame.Surface:
-    """Create a simple barrel icon with wood planks."""
-    w, h = size
-    surf = pygame.Surface((w, h), pygame.SRCALPHA)
-    # Base colour
-    surf.fill((135, 82, 52))  # brown
-    # Draw darker top and bottom rims
-    pygame.draw.rect(surf, (115, 62, 32), pygame.Rect(0, 0, w, h // 6))
-    pygame.draw.rect(surf, (115, 62, 32), pygame.Rect(0, h - h // 6, w, h // 6))
-    # Draw vertical bands
-    band_w = max(2, w // 8)
-    for i in range(1, 4):
-        x = i * (w // 4)
-        pygame.draw.rect(surf, (100, 50, 25), pygame.Rect(x - band_w // 2, 0, band_w, h))
-    return surf
-
-
-def create_spike_icon(size: Tuple[int, int] = (32, 32)) -> pygame.Surface:
-    """Create a simple spike trap icon using triangular spikes."""
-    w, h = size
-    surf = pygame.Surface((w, h), pygame.SRCALPHA)
-    # Draw base
-    surf.fill((60, 60, 60))
-    # Draw spikes (three triangles)
-    tri_w = w // 4
-    tri_h = h // 2
-    for i in range(3):
-        # Coordinates of triangle vertices
-        x0 = (i + 1) * (w // 4) - tri_w // 2
-        pygame.draw.polygon(surf, (200, 200, 200), [(x0, h - 2), (x0 + tri_w // 2, h - tri_h - 2), (x0 + tri_w, h - 2)])
-    return surf
-
-
-def create_upgrade_icons() -> Dict[str, pygame.Surface]:
-    """
-    Generate icons for each upgrade type.  Icons are 20x20 pixel art
-    representing power, rapid fire, speed, vitality, spread shot, shield and
-    bomb.  Returns a mapping from upgrade name to its corresponding surface.
-    """
-    icons: Dict[str, pygame.Surface] = {}
-    # Helper to draw a heart shape
-    def draw_heart(surf: pygame.Surface, color: Tuple[int, int, int]):
-        w, h = surf.get_size()
-        # two circles and a triangle
-        r = w // 4
-        pygame.draw.circle(surf, color, (r + 1, r), r)
-        pygame.draw.circle(surf, color, (w - r - 1, r), r)
-        pygame.draw.polygon(surf, color, [(1, r), (w - 1, r), (w // 2, h - 2)])
-
-    # Power Up: draw a sword
-    surf = pygame.Surface((20, 20), pygame.SRCALPHA)
-    # blade
-    pygame.draw.rect(surf, (180, 180, 200), pygame.Rect(9, 2, 2, 12))
-    # guard
-    pygame.draw.rect(surf, (120, 80, 40), pygame.Rect(6, 12, 8, 2))
-    # handle
-    pygame.draw.rect(surf, (100, 60, 30), pygame.Rect(9, 14, 2, 4))
-    icons['Power Up'] = surf
-    # Rapid Fire: draw a lightning bolt
-    surf = pygame.Surface((20, 20), pygame.SRCALPHA)
-    pygame.draw.polygon(surf, (255, 215, 0), [(6, 4), (12, 4), (9, 9), (14, 9), (8, 16), (11, 10), (5, 10)])
-    icons['Rapid Fire'] = surf
-    # Fleet Feet: draw boots
-    surf = pygame.Surface((20, 20), pygame.SRCALPHA)
-    pygame.draw.rect(surf, (150, 75, 0), pygame.Rect(4, 10, 5, 6))
-    pygame.draw.rect(surf, (150, 75, 0), pygame.Rect(11, 10, 5, 6))
-    pygame.draw.rect(surf, (100, 50, 0), pygame.Rect(4, 16, 5, 2))
-    pygame.draw.rect(surf, (100, 50, 0), pygame.Rect(11, 16, 5, 2))
-    icons['Fleet Feet'] = surf
-    # Vitality: draw heart
-    surf = pygame.Surface((20, 20), pygame.SRCALPHA)
-    draw_heart(surf, (200, 50, 70))
-    icons['Vitality'] = surf
-    # Spread Shot: draw three bullets
-    surf = pygame.Surface((20, 20), pygame.SRCALPHA)
-    for i, x in enumerate([6, 10, 14]):
-        pygame.draw.circle(surf, (255, 255, 0), (x, 10), 2)
-        pygame.draw.rect(surf, (255, 255, 0), pygame.Rect(x - 2, 10, 4, 6))
-    icons['Spread Shot'] = surf
-    # Shield: draw shield
-    surf = pygame.Surface((20, 20), pygame.SRCALPHA)
-    pygame.draw.polygon(surf, (100, 160, 220), [(10, 4), (16, 8), (16, 14), (10, 18), (4, 14), (4, 8)])
-    pygame.draw.polygon(surf, (60, 120, 180), [(10, 6), (14, 9), (14, 13), (10, 16), (6, 13), (6, 9)])
-    icons['Shield'] = surf
-    # Bomb: use the bomb icon loaded from file later (assigned in Game.__init__)
-    # We'll assign this in Game.__init__ once bomb image is loaded
-    return icons
-
-# Directory containing 8‑direction hero animations.  This folder
-# contains individual PNG files for the player's jump/walk animation
-# (eight frames for each cardinal direction).  The left direction is
-# derived by flipping the right frames horizontally.
-HERO_DIR: str = os.path.join(ASSETS_DIR, 'hero')
-
-# Cooldowns and durations (ms)
-DASH_COOLDOWN_MS: int = 600
-DASH_DURATION_MS: int = 150
-DASH_MULTIPLIER: float = 3.0
-
-# Boss parameters
-BOSS_HEALTH: int = 200
-BOSS_BULLET_COUNT: int = 12
-BOSS_BULLET_SPEED: float = 300.0
-BOSS_SHOT_COOLDOWN_MS: int = 1500
-BOSS_MINION_COOLDOWN_MS: int = 3000
-
-# Probability of spawning a TurretEnemy instead of a normal or ranged enemy.  A value between 0 and 1.
-TURRET_PROBABILITY: float = 0.15
-
-# High score storage.  When the player wins the game, their run time and kill count
-# are compared against the best recorded times and kills.  The high score is
-# persisted in a JSON file so that subsequent sessions can display and update it.
-HIGHSCORE_FILE: str = os.path.join(os.path.dirname(__file__), 'highscore.json')
-
-# Splitter enemy parameters.  Splitter enemies split into smaller mini enemies upon
-# death.  The probability controls how often they spawn in place of a normal
-# enemy, and the mini enemy stats define their health and speed.
-SPLITTER_PROBABILITY: float = 0.15
-MINI_ENEMY_HEALTH: int = 10
-MINI_ENEMY_SPEED: float = ENEMY_SPEED * 1.3
-
-# Teleporter enemy parameters.  Teleporter enemies periodically teleport to
-# random positions instead of continuously chasing the player.
-TELEPORTER_PROBABILITY: float = 0.10
-TELEPORT_COOLDOWN_MS: int = 2000
-
-# Bomb parameters.  Bombs are obtained via upgrades and can be deployed by
-# pressing the 'B' key.  After a short fuse they explode, dealing area‑of‑effect
-# damage to all enemies within the given radius.
-BOMB_FUSE_MS: int = 1000
-BOMB_RADIUS: float = 80.0
-BOMB_DAMAGE: int = 40
-
-# -----------------------------------------------------------------------------
-# Currency, shop and environmental parameters
-#
-# Gold (currency) drops from enemies and barrels.  Each coin is worth a fixed
-# amount of gold.  Barrels can also drop coins when destroyed.  Traps and
-# shops are optional room features that add variety.  These values control
-# probabilities and effects.
-
-# Range of gold values when spawning coins (min to max).  Enemies and barrels
-# spawn a number of coins in this range.  Each coin has a value of 1.
-GOLD_MIN: int = 1
-GOLD_MAX: int = 3
-
-# Health of destructible barrels.  Barrels block bullets (but not movement).
-# When destroyed they may drop coins or potions.
-BARREL_HEALTH: int = 20
-
-# Probability that a destroyed barrel drops a potion instead of gold.  A value
-# between 0 and 1.  If a potion is dropped, the barrel will not drop coins.
-BARREL_DROP_POTION_PROB: float = 0.2
-
-# Spike trap timing and damage.  Spikes alternate between active and inactive
-# phases.  When active, they deal damage to the player (or enemies) on
-# contact.
-SPIKE_ACTIVE_MS: int = 1500
-SPIKE_INACTIVE_MS: int = 1000
-SPIKE_DAMAGE: int = 15
-
-# Probability that a room is a shop (excluding the first and last room).
-SHOP_PROBABILITY: float = 0.2
-
-# Shop upgrade offerings.  Each entry maps a name to a tuple of (effect,
-# price).  Effects are callables that accept a Player and apply the upgrade.
-# Prices are expressed in units of gold.  Additional effects can be added
-# easily to expand the shop inventory.
-SHOP_UPGRADES: Dict[str, Tuple[Callable, int]] = {
-    # Grant extra bombs at a modest cost
-    'Bigger Bomb': (lambda p: setattr(p, 'bombs', p.bombs + 2), 5),
-    # Increase maximum health and heal the player
-    'Heart Container': (lambda p: (setattr(p, 'max_health', p.max_health + 20), setattr(p, 'health', min(p.max_health + 20, p.health + 20))), 6),
-    # Increase bullet damage but reduce maximum health (glass cannon)
-    'Glass Cannon': (lambda p: (setattr(p, 'bullet_damage', p.bullet_damage + 10), setattr(p, 'max_health', max(10, p.max_health - 20)), setattr(p, 'health', min(p.health, p.max_health))), 8),
-    # Add multiple shield charges
-    'Shield Boost': (lambda p: setattr(p, 'shield', p.shield + 3), 7),
-    # Further reduce fire rate for rapid shooting
-    'Rapid Fire+': (lambda p: setattr(p, 'fire_rate_ms', max(20, p.fire_rate_ms - 70)), 6),
-}
-
-# Upgrade definitions.  When a room (except the last) is cleared, an upgrade
-# spawns.  The upgrade chosen randomly from this set will modify the player
-# stat indicated by the provided lambda.
-UPGRADE_TYPES = {
-    'Power Up': lambda p: setattr(p, 'bullet_damage', p.bullet_damage + 5),
-    'Rapid Fire': lambda p: setattr(p, 'fire_rate_ms', max(50, p.fire_rate_ms - 50)),
-    'Fleet Feet': lambda p: setattr(p, 'speed', p.speed + 40),
-    'Vitality': lambda p: (setattr(p, 'max_health', p.max_health + 20), setattr(p, 'health', min(p.max_health + 20, p.health + 20))),
-    # Fire additional bullets per shot.  Spread Shot increases bullet_count by 2 up to a maximum of 5.
-    'Spread Shot': lambda p: setattr(p, 'bullet_count', min(5, p.bullet_count + 2)),
-    # Grant a protective shield that absorbs one incoming hit.
-    'Shield': lambda p: setattr(p, 'shield', p.shield + 1),
-    # Grant the player an additional bomb.  Bombs can be deployed with the 'B'
-    # key and explode after a short fuse, damaging nearby enemies.
-    'Bomb': lambda p: setattr(p, 'bombs', p.bombs + 1),
-}
-
-
-# -----------------------------------------------------------------------------
+###############################################################################
 # Asset loading helpers
-#
-# These functions encapsulate loading and slicing of external sprite assets.
-# They must be called after ``pygame.init()`` so that surfaces are created
-# correctly.  ``Game`` invokes these functions during initialisation and
-# stores the results for use by enemy and item classes.  Splitting the
-# spritesheets here isolates file handling and keeps the rest of the code
-# clean.
+###############################################################################
 
-def load_slime_frames(path: str) -> Dict[str, List[pygame.Surface]]:
-    """Load the Calciumtrice slime sprite sheet and return walking frames.
+ASSET_DIR = os.path.join(os.path.dirname(__file__), 'assets')
 
-    The sheet is arranged as a 320x640 image with 10 columns and 20 rows of
-    32x32 pixel frames.  There are four colour variants (green, blue, red,
-    yellow) with five animations each.  We extract the third row (index 2)
-    of each colour variant which represents the walk animation.  The returned
-    dictionary maps colour names to a list of Pygame surfaces.
+def load_hero_frames(path: str) -> Dict[int, List[pygame.Surface]]:
+    """
+    Load hero frames from a 4×4 spritesheet.  The sheet is assumed to
+    contain four rows (up, down, left, right) and four columns (animation
+    frames).  Frames are 32×32 pixels and will be scaled to 32×48 for
+    better proportions.
+
+    Returns a dictionary keyed by direction constant (0=up,1=down,2=left,3=right)
+    mapping to lists of pygame.Surface frames.
     """
     sheet = pygame.image.load(path).convert_alpha()
-    frame_width, frame_height = 32, 32
-    cols = sheet.get_width() // frame_width
-    rows = sheet.get_height() // frame_height
-    # Precompute all rows
-    all_rows: List[List[pygame.Surface]] = []
-    for row in range(rows):
-        row_frames: List[pygame.Surface] = []
-        for col in range(cols):
-            rect = pygame.Rect(col * frame_width, row * frame_height, frame_width, frame_height)
-            frame = sheet.subsurface(rect)
-            row_frames.append(frame)
-        all_rows.append(row_frames)
-    # Map colours to their walk animation row indices
-    colour_rows = {
-        'green': 2,
-        'blue': 7,
-        'red': 12,
-        'yellow': 17,
-    }
-    slime_frames: Dict[str, List[pygame.Surface]] = {}
-    for colour, row_idx in colour_rows.items():
-        if row_idx < len(all_rows):
-            slime_frames[colour] = all_rows[row_idx]
-    return slime_frames
+    # compute frame size based on sheet dimensions
+    sheet_width, sheet_height = sheet.get_size()
+    tile_w = sheet_width // 4
+    tile_h = sheet_height // 4
+    frames: Dict[int, List[pygame.Surface]] = {0: [], 1: [], 2: [], 3: []}
+    for row, dir_idx in enumerate([0, 1, 2, 3]):
+        for col in range(4):
+            frame = sheet.subsurface((col * tile_w, row * tile_h, tile_w, tile_h)).copy()
+            # scale to 32×48 (keeping width but elongating height for humanoid proportions)
+            frame = pygame.transform.scale(frame, (32, 48))
+            frames[dir_idx].append(frame)
+    return frames
+
+
+def load_enemy_frames(directory: str) -> Dict[int, List[pygame.Surface]]:
+    """
+    Load enemy frames from a directory with files named
+    ``jump_down (n).png``, ``jump_up (n).png`` and ``jump_right (n).png``
+    where n runs from 1 through 4.  Left frames are generated by
+    horizontally flipping the right frames.  Returns a dictionary mapping
+    direction constants (0=up,1=down,2=left,3=right) to lists of frames.
+    """
+    directions = {0: 'jump_up', 1: 'jump_down', 3: 'jump_right'}
+    frames: Dict[int, List[pygame.Surface]] = {0: [], 1: [], 2: [], 3: []}
+    for dir_idx, name in directions.items():
+        for i in range(1, 5):
+            img_path = os.path.join(directory, f"{name} ({i}).png")
+            img = pygame.image.load(img_path).convert_alpha()
+            # scale to match hero size (32×48) if needed
+            img = pygame.transform.scale(img, (32, 48))
+            frames[dir_idx].append(img)
+    # create left frames by flipping right frames
+    frames[2] = [pygame.transform.flip(f, True, False) for f in frames[3]]
+    return frames
+
+
+def load_slime_frames(path: str) -> List[pygame.Surface]:
+    """
+    Load slime frames from a sprite sheet.  The sheet is 320×640 with 10
+    columns and 20 rows of 32×32 frames (this matches the original game's
+    assets).  We'll only use the first row of frames for walking animation.
+    Returns a list of four frames scaled up to 32×32.
+    """
+    sheet = pygame.image.load(path).convert_alpha()
+    frames: List[pygame.Surface] = []
+    for col in range(4):
+        frame = sheet.subsurface((col * 32, 0, 32, 32)).copy()
+        frames.append(frame)
+    return frames
 
 
 def load_potion_images(path: str) -> List[pygame.Surface]:
-    """Load the 16x16 potion set and return a list of potion images.
-
-    The potion set contains four coloured potions arranged horizontally.
-    Each potion is 16x16 pixels.  Returns a list of four surfaces.
+    """
+    Load the four potions from the horizontal strip.  Each potion is 16×16.
+    We scale them up to 16×16 (no scaling) and return a list.
     """
     sheet = pygame.image.load(path).convert_alpha()
-    potions: List[pygame.Surface] = []
-    frame_width, frame_height = 16, 16
-    cols = sheet.get_width() // frame_width
-    for col in range(cols):
-        rect = pygame.Rect(col * frame_width, 0, frame_width, frame_height)
-        potions.append(sheet.subsurface(rect))
-    return potions
+    frames: List[pygame.Surface] = []
+    for i in range(4):
+        frames.append(sheet.subsurface((i * 16, 0, 16, 16)).copy())
+    return frames
 
 
 def load_coin_frames(path: str) -> List[pygame.Surface]:
-    """Load the coin animation strip (12 frames) and return the frames.
-
-    The coin spritesheet is a horizontal strip of 12 frames, each 16x16 pixels.
-    Coins can animate by cycling through these frames.  Returns a list of
-    surfaces.
+    """
+    Load the 12 frames of the coin strip.  Each frame is 16×16.  Returns
+    a list for coin animation.
     """
     sheet = pygame.image.load(path).convert_alpha()
-    frame_width, frame_height = 16, 16
-    cols = sheet.get_width() // frame_width
     frames: List[pygame.Surface] = []
-    for col in range(cols):
-        rect = pygame.Rect(col * frame_width, 0, frame_width, frame_height)
-        frames.append(sheet.subsurface(rect))
+    for i in range(12):
+        frames.append(sheet.subsurface((i * 16, 0, 16, 16)).copy())
     return frames
 
 
-def load_hero_frames(dir_path: str) -> Dict[int, List[pygame.Surface]]:
-    """
-    Load a series of PNG images from ``dir_path`` corresponding to the
-    player's movement animations.  The files should follow the naming
-    pattern ``jump_direction (n).png`` where ``direction`` is one of
-    ``up``, ``down`` or ``right`` and ``n`` is a 1‑based index.  The
-    returned mapping uses the global direction constants (UP, DOWN, LEFT,
-    RIGHT) as keys and lists of Pygame surfaces as values.  For the left
-    direction we mirror the right frames horizontally.  If no frames are
-    found for a direction, an empty list is returned for that key.
-    """
-    frames: Dict[int, List[pygame.Surface]] = {UP: [], DOWN: [], LEFT: [], RIGHT: []}
-    # Because filenames contain spaces and parentheses, we'll list
-    # directory contents and filter manually
-    try:
-        filenames = sorted(os.listdir(dir_path))
-    except FileNotFoundError:
-        return frames
-    # Organise files by direction prefix
-    temp: Dict[str, List[str]] = {'up': [], 'down': [], 'right': []}
-    for fname in filenames:
-        if fname.startswith('jump_up'):
-            temp['up'].append(fname)
-        elif fname.startswith('jump_down'):
-            temp['down'].append(fname)
-        elif fname.startswith('jump_right'):
-            temp['right'].append(fname)
-    # Sort by natural order (assuming format "(n)")
-    import re
-    def sort_key(name: str) -> int:
-        m = re.search(r'\((\d+)\)', name)
-        return int(m.group(1)) if m else 0
-    for key in temp:
-        temp[key].sort(key=sort_key)
-    # Load frames for up, down, right
-    for dname, dir_constant in [('up', UP), ('down', DOWN), ('right', RIGHT)]:
-        for fname in temp[dname]:
-            path = os.path.join(dir_path, fname)
-            img = pygame.image.load(path).convert_alpha()
-            frames[dir_constant].append(img)
-    # Create left frames by flipping right frames
-    frames[LEFT] = [pygame.transform.flip(img, True, False) for img in frames[RIGHT]]
-    return frames
+###############################################################################
+# Entity classes
+###############################################################################
+
+# Direction constants
+UP, DOWN, LEFT, RIGHT = 0, 1, 2, 3
 
 
+class Player:
+    def __init__(self, x: float, y: float, frames: Dict[int, List[pygame.Surface]]):
+        self.x = x
+        self.y = y
+        self.width = 32
+        self.height = 48
+        self.frames = frames
+        self.direction = DOWN  # facing down initially
+        self.anim_index = 0
+        self.anim_timer = 0.0
+        self.anim_speed = 0.12  # seconds per frame
+        self.speed = 160.0
+        self.health = 100
+        self.max_health = 100
+        self.coins = 0
+        self.potions = 0
+        self.bombs = 1
+        # bullets fired in the last direction
+        self.last_move_dir = DOWN
 
-# -----------------------------------------------------------------------------
-# Utility functions
+    @property
+    def rect(self) -> pygame.Rect:
+        return pygame.Rect(int(self.x), int(self.y), self.width, self.height)
 
-def rand_int(a: int, b: int) -> int:
-    """Return a random integer N such that a <= N <= b."""
-    return random.randint(a, b)
-
-
-def opposite_direction(dir: int) -> int:
-    return {UP: DOWN, DOWN: UP, LEFT: RIGHT, RIGHT: LEFT}[dir]
-
-
-# -----------------------------------------------------------------------------
-# Data classes for Rooms and Dungeons
-
-@dataclass
-class Room:
-    """Metadata about a single dungeon room."""
-    index: int
-    neighbors: Dict[int, int]
-    enemy_count: int
-    has_potion: bool
-    cleared: bool = False
-    # Flag indicating whether this room is a shop.  Shop rooms do not spawn
-    # enemies or potions and instead contain purchasable upgrades.
-    is_shop: bool = False
-
-
-class Dungeon:
-    """Generate and manage a collection of rooms with random connections."""
-    def __init__(self, count: int) -> None:
-        self.rooms: List[Room] = []
-        for i in range(count):
-            # placeholder neighbors; actual connections assigned later
-            self.rooms.append(Room(index=i, neighbors={}, enemy_count=rand_int(2, 4), has_potion=(random.random() < 0.4)))
-        self._create_connections()
-
-        # Determine which rooms will become shops.  Shops are excluded from the
-        # first and last room and do not spawn enemies or potions.  The
-        # probability is controlled by SHOP_PROBABILITY.  Ensure at least one
-        # shop exists by adding a fallback if none were selected.
-        possible_indices = [i for i in range(1, count - 1)]
-        shop_selected = False
-        for i in possible_indices:
-            if random.random() < SHOP_PROBABILITY:
-                self.rooms[i].is_shop = True
-                self.rooms[i].enemy_count = 0
-                self.rooms[i].has_potion = False
-                shop_selected = True
-        if not shop_selected and possible_indices:
-            idx = random.choice(possible_indices)
-            self.rooms[idx].is_shop = True
-            self.rooms[idx].enemy_count = 0
-            self.rooms[idx].has_potion = False
-
-    def _create_connections(self) -> None:
-        """
-        Connect each room to the next to form a guaranteed linear chain, with
-        random direction assignments.  This simplified algorithm avoids
-        connectivity bugs and ensures every room is reachable.  Additional
-        connections could be added in the future to introduce loops.
-        """
-        dirs = [UP, DOWN, LEFT, RIGHT]
-        for i in range(len(self.rooms) - 1):
-            available = dirs.copy()
-            random.shuffle(available)
-            connected = False
-            for d in available:
-                if d in self.rooms[i].neighbors:
-                    continue
-                opp = opposite_direction(d)
-                if opp in self.rooms[i + 1].neighbors:
-                    continue
-                self.rooms[i].neighbors[d] = i + 1
-                self.rooms[i + 1].neighbors[opp] = i
-                connected = True
-                break
-            if not connected:
-                # fallback to RIGHT/LEFT connection
-                self.rooms[i].neighbors[RIGHT] = i + 1
-                self.rooms[i + 1].neighbors[LEFT] = i
-
-        # Add extra random connections to introduce loops and branching.  These
-        # connections enhance replayability by allowing rooms to be reached via
-        # multiple paths.  We attempt to create a few additional links between
-        # non‑adjacent rooms, skipping if no free direction exists on either end.
-        extra = max(1, len(self.rooms) // 3)
-        for _ in range(extra):
-            # choose two distinct rooms that are not directly connected in the chain
-            i = random.randint(0, len(self.rooms) - 1)
-            j = random.randint(0, len(self.rooms) - 1)
-            if i == j or abs(i - j) == 1:
-                continue
-            # attempt to connect rooms i and j
-            self._connect_rooms(i, j, [UP, DOWN, LEFT, RIGHT])
-
-    def _connect_rooms(self, i: int, target: int, dirs: List[int]) -> None:
-        """
-        Attempt to connect room ``i`` with room ``target`` using a free direction on
-        both ends.  The connection is only created if both rooms have at least one
-        available direction.  If no such pair of directions exists, this
-        method does nothing.  This conservative approach avoids overriding
-        existing connections, which could break the main chain and result in
-        unreachable rooms.
-        """
-        # build lists of free directions for each room
-        free_i = [d for d in dirs if d not in self.rooms[i].neighbors]
-        free_t = [d for d in dirs if d not in self.rooms[target].neighbors]
-        random.shuffle(free_i)
-        random.shuffle(free_t)
-        for d_t in free_t:
-            opp = opposite_direction(d_t)
-            if opp in free_i:
-                # connect target -> i via d_t and i -> target via opp
-                self.rooms[target].neighbors[d_t] = i
-                self.rooms[i].neighbors[opp] = target
-                return
-        # If we reach here no mutual free directions were found; skip creating a loop
-        return
-
-    def get_room(self, index: int) -> Room:
-        return self.rooms[index]
-
-    def get_layout_positions(self) -> Dict[int, Tuple[int, int]]:
-        """
-        Compute a 2D layout for the dungeon rooms by performing a breadth‑first
-        traversal from the starting room.  Each room is assigned integer
-        coordinates on a grid based on its neighbor directions.  Loops may
-        cause conflicting assignments, but the first discovered path is
-        accepted.
-
-        Returns a mapping from room index to (x, y) grid coordinates.
-        """
-        positions: Dict[int, Tuple[int, int]] = {0: (0, 0)}
-        visited: set[int] = {0}
-        from collections import deque
-        queue = deque([0])
-        while queue:
-            i = queue.popleft()
-            x, y = positions[i]
-            for direction, nb in self.rooms[i].neighbors.items():
-                if nb not in positions:
-                    if direction == UP:
-                        positions[nb] = (x, y - 1)
-                    elif direction == DOWN:
-                        positions[nb] = (x, y + 1)
-                    elif direction == LEFT:
-                        positions[nb] = (x - 1, y)
-                    else:  # RIGHT
-                        positions[nb] = (x + 1, y)
-                    queue.append(nb)
-        return positions
-
-
-# -----------------------------------------------------------------------------
-# Entity hierarchy
-
-class Entity:
-    """Base class for all moving actors with health."""
-    def __init__(self, x: float, y: float, width: int, height: int, health: int) -> None:
-        self.rect = pygame.Rect(x, y, width, height)
-        self.vel = pygame.Vector2(0, 0)
-        self.max_health = health
-        self.health = health
-        self.alive = True
-
-    def update(self, dt: float) -> None:
-        # Move by velocity * delta time
-        self.rect.x += self.vel.x * dt
-        self.rect.y += self.vel.y * dt
-
-    def draw(self, surface: pygame.Surface) -> None:
-        # default: draw rectangle (override in subclasses)
-        pygame.draw.rect(surface, (255, 255, 255), self.rect)
-
-    def damage(self, amount: int) -> None:
-        self.health -= amount
-        if self.health <= 0:
-            self.alive = False
-
-    def heal(self, amount: int) -> None:
-        self.health = min(self.max_health, self.health + amount)
-
-
-class Player(Entity):
-    """Player controlled by keyboard input and animated via sprite sheet."""
-    def __init__(self, x: float, y: float, frames: Dict[int, List[pygame.Surface]]) -> None:
-        super().__init__(x, y, 32, 48, PLAYER_MAX_HEALTH)
-        # Core attributes
-        self.speed: float = PLAYER_SPEED
-        self.bullet_damage: int = 15  # initial damage per bullet
-        self.fire_rate_ms: int = BULLET_RATE_MS  # rate of fire in milliseconds
-        self.frames = frames  # map of direction to list of frames
-        self.frame_index = 0
-        self.animation_time = 0.0
-        self.animation_rate = 0.12  # seconds per frame
-        self.direction: int = DOWN
-        self.last_direction: int = DOWN
-        self.last_shot_time: float = 0.0
-        self.bullets: List[Bullet] = []
-
-        # Dash mechanics
-        self.dash_time_remaining: float = 0.0  # ms remaining in current dash
-        self.last_dash_time: float = 0.0
-        self.invulnerable: bool = False
-
-        # Additional combat attributes
-        # Number of bullets fired per shot (spread shot).  Starts at 1 and can be
-        # increased via upgrades.
-        self.bullet_count: int = 1
-        # Shield points; each point absorbs one hit from enemies or bullets
-        self.shield: int = 0
-        # Number of bombs available; bombs can be planted with the 'B' key
-        self.bombs: int = 0
-
-
-    def handle_input(self, keys: pygame.key.ScancodeWrapper, dt: float) -> None:
-        self.vel.update(0, 0)
+    def update(self, dt: float, keys: pygame.key.ScancodeWrapper):
+        # Movement
+        dx = dy = 0.0
         moving = False
-        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-            self.vel.x = -self.speed
-            self.direction = LEFT
-            moving = True
-        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-            self.vel.x = self.speed
-            self.direction = RIGHT
-            moving = True
         if keys[pygame.K_w] or keys[pygame.K_UP]:
-            self.vel.y = -self.speed
-            self.direction = UP
+            dy -= 1
+            self.last_move_dir = UP
             moving = True
         if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-            self.vel.y = self.speed
-            self.direction = DOWN
+            dy += 1
+            self.last_move_dir = DOWN
             moving = True
-        # Normalize diagonal movement
-        if self.vel.length_squared() > 0:
-            self.vel = self.vel.normalize() * self.speed
-            # Apply dash multiplier if currently dashing
-            if self.dash_time_remaining > 0:
-                self.vel *= DASH_MULTIPLIER
-        # Update last direction if moving
-        if moving:
-            self.last_direction = self.direction
-            self.animation_time += dt
-            if self.animation_time >= self.animation_rate:
-                self.animation_time -= self.animation_rate
-                self.frame_index = (self.frame_index + 1) % len(self.frames[self.direction])
-        else:
-            # reset animation
-            self.frame_index = 0
-            self.animation_time = 0.0
-        # Shooting with keyboard has been removed; shooting is now handled
-        # externally via mouse events in the Game loop.  ``Player.shoot_at_target``
-        # will be invoked by the game when the left mouse button is pressed.
+        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+            dx -= 1
+            self.last_move_dir = LEFT
+            moving = True
+        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+            dx += 1
+            self.last_move_dir = RIGHT
+            moving = True
+        # normalize movement
+        if dx != 0 or dy != 0:
+            length = math.hypot(dx, dy)
+            dx /= length
+            dy /= length
+            self.direction = self.last_move_dir
+        # update position
+        self.x += dx * self.speed * dt
+        self.y += dy * self.speed * dt
+        # constrain to screen
+        self.x = max(0, min(self.x, 800 - self.width))
+        self.y = max(0, min(self.y, 600 - self.height))
+        # update animation
+        self.anim_timer += dt
+        if self.anim_timer >= self.anim_speed:
+            self.anim_timer -= self.anim_speed
+            self.anim_index = (self.anim_index + 1) % len(self.frames[self.direction])
 
-        # Dash (shift) mechanics
-        if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
-            # Get current time in milliseconds and initiate dash if cooldown has elapsed
-            now_ticks = pygame.time.get_ticks()
-            if now_ticks - self.last_dash_time >= DASH_COOLDOWN_MS and self.dash_time_remaining <= 0:
-                self.last_dash_time = now_ticks
-                self.dash_time_remaining = DASH_DURATION_MS
-                self.invulnerable = True
-
-    def shoot(self, direction: int) -> None:
-        """
-        Fire a bullet in the specified direction.  The bullet's initial
-        position is at the centre of the player.  The velocity is derived
-        from the global BULLET_SPEED and the chosen direction.  The bullet's
-        damage is tied to the player's current bullet_damage stat.
-        """
-        cx = self.rect.centerx
-        cy = self.rect.centery
-        # Determine base angle for the chosen direction (in degrees)
-        if direction == UP:
-            base_angle = -90.0  # up is -90 degrees
-        elif direction == DOWN:
-            base_angle = 90.0
-        elif direction == LEFT:
-            base_angle = 180.0
-        else:  # RIGHT
-            base_angle = 0.0
-        # Spread angle between bullets (degrees).  A modest spread keeps shots controlled.
-        spread_deg = 15.0
-        # Compute starting offset so that bullets are centred around the base angle
-        total_spread = spread_deg * (self.bullet_count - 1)
-        for i in range(self.bullet_count):
-            angle_deg = base_angle - total_spread / 2 + i * spread_deg
-            angle_rad = math.radians(angle_deg)
-            vx = math.cos(angle_rad) * BULLET_SPEED
-            vy = math.sin(angle_rad) * BULLET_SPEED
-            bullet = Bullet(cx, cy, vx, vy)
-            bullet.damage = self.bullet_damage
-            self.bullets.append(bullet)
-
-    def shoot_at_target(self, target_pos: Tuple[int, int]) -> None:
-        """
-        Fire bullets toward a specific position (typically the mouse cursor).
-        This method uses the player's ``bullet_count`` and ``bullet_damage``
-        stats to produce a spread of bullets centred on the angle from the
-        player to ``target_pos``.  The spread between bullets is fixed at
-        15 degrees.  The player's ``last_direction`` is updated to reflect
-        the general facing direction for animation purposes.
-        """
-        cx = self.rect.centerx
-        cy = self.rect.centery
-        dx = target_pos[0] - cx
-        dy = target_pos[1] - cy
-        # Do not fire if target is at the same position
-        if dx == 0 and dy == 0:
-            return
-        # Determine base angle in radians
-        base_angle = math.atan2(dy, dx)
-        # Update last_direction for sprite orientation
-        if abs(dx) > abs(dy):
-            self.last_direction = RIGHT if dx > 0 else LEFT
-        else:
-            self.last_direction = DOWN if dy > 0 else UP
-        # Spread angle (radians)
-        spread_rad = math.radians(15.0)
-        total_spread = spread_rad * (self.bullet_count - 1)
-        # Use player's fire rate to throttle shooting
-        now = pygame.time.get_ticks()
-        if now - self.last_shot_time < self.fire_rate_ms:
-            return
-        self.last_shot_time = now
-        for i in range(self.bullet_count):
-            angle = base_angle - total_spread / 2 + i * spread_rad
-            vx = math.cos(angle) * BULLET_SPEED
-            vy = math.sin(angle) * BULLET_SPEED
-            bullet = Bullet(cx, cy, vx, vy)
-            bullet.damage = self.bullet_damage
-            self.bullets.append(bullet)
-
-    def update(self, dt: float) -> None:
-        super().update(dt)
-        # Constrain to screen bounds
-        self.rect.clamp_ip(pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT))
-        # Update bullets
-        for bullet in self.bullets:
-            bullet.update(dt)
-        # Remove inactive bullets
-        self.bullets = [b for b in self.bullets if b.alive]
-
-        # Handle dash timing.  When dashing, multiply velocity; once expired,
-        # remove invulnerability.  dt is in seconds so convert to ms.
-        if self.dash_time_remaining > 0:
-            self.dash_time_remaining -= dt * 1000.0
-            # Increase speed while dashing (applied in handle_input for this frame)
-        else:
-            if self.invulnerable:
-                self.invulnerable = False
-
-    def draw(self, surface: pygame.Surface) -> None:
-        # Draw player sprite.  If frames are available, scale to the
-        # player rectangle size.  Otherwise draw a fallback rectangle.
-        if self.frames and self.frames.get(self.last_direction):
-            # Use modulo to avoid index errors if frame list shorter than expected
-            frames_for_dir = self.frames[self.last_direction]
-            frame = frames_for_dir[self.frame_index % len(frames_for_dir)]
-            # Scale frame to match the player's rectangle
-            if frame.get_size() != self.rect.size:
-                frame = pygame.transform.scale(frame, self.rect.size)
-            surface.blit(frame, self.rect.topleft)
-        else:
-            # Fallback: draw a white rectangle
-            pygame.draw.rect(surface, (220, 220, 220), self.rect)
-        # Draw bullets
-        for bullet in self.bullets:
-            bullet.draw(surface)
+    def draw(self, surface: pygame.Surface):
+        frame = self.frames[self.direction][self.anim_index]
+        surface.blit(frame, (self.x, self.y))
 
 
 class Bullet:
-    """Projectiles fired by the player."""
-    def __init__(self, x: float, y: float, vx: float, vy: float) -> None:
+    def __init__(self, x: float, y: float, direction: int):
         self.pos = pygame.Vector2(x, y)
-        self.vel = pygame.Vector2(vx, vy)
-        self.radius = 4
+        speed = 400.0
+        if direction == UP:
+            self.vel = pygame.Vector2(0, -speed)
+        elif direction == DOWN:
+            self.vel = pygame.Vector2(0, speed)
+        elif direction == LEFT:
+            self.vel = pygame.Vector2(-speed, 0)
+        else:
+            self.vel = pygame.Vector2(speed, 0)
         self.alive = True
-        self.damage = 15
 
-    def update(self, dt: float) -> None:
+    def update(self, dt: float):
         self.pos += self.vel * dt
-        # Mark dead if off screen
-        if (self.pos.x < 0 or self.pos.x > SCREEN_WIDTH or
-                self.pos.y < 0 or self.pos.y > SCREEN_HEIGHT):
+        if (self.pos.x < 0 or self.pos.x > 800 or
+            self.pos.y < 0 or self.pos.y > 600):
             self.alive = False
 
-    def draw(self, surface: pygame.Surface) -> None:
-        if self.alive:
-            pygame.draw.circle(surface, COLOR_BULLET, (int(self.pos.x), int(self.pos.y)), self.radius)
-
-
-class EnemyBullet(Bullet):
-    """Projectiles fired by enemies toward the player."""
-    def __init__(self, x: float, y: float, vx: float, vy: float) -> None:
-        super().__init__(x, y, vx, vy)
-        self.radius = 5
-        self.damage = 10
-
-    def draw(self, surface: pygame.Surface) -> None:
-        if self.alive:
-            pygame.draw.circle(surface, COLOR_ENEMY, (int(self.pos.x), int(self.pos.y)), self.radius)
-
-
-class Enemy(Entity):
-    """Simple enemy that chases the player."""
-    def __init__(self, x: float, y: float) -> None:
-        super().__init__(x, y, 32, 32, ENEMY_MAX_HEALTH)
-        self.speed = ENEMY_SPEED
-        # Animation fields.  ``anim_frames`` will be set externally by the
-        # Game when spawning enemies.  When populated, the enemy will cycle
-        # through the frames at ``anim_rate`` seconds per frame.  ``frame_index``
-        # tracks the current frame and ``anim_timer`` accumulates time between
-        # frame advances.
-        self.anim_frames: Optional[List[pygame.Surface]] = None
-        self.frame_index: int = 0
-        self.anim_timer: float = 0.0
-        self.anim_rate: float = 0.14  # seconds per frame
-
-    def update(self, dt: float, player: Player) -> None:
-        if not self.alive:
-            return
-        # Move towards player
-        dx = player.rect.centerx - self.rect.centerx
-        dy = player.rect.centery - self.rect.centery
-        dist = math.hypot(dx, dy)
-        if dist > 0:
-            self.vel.x = (dx / dist) * self.speed
-            self.vel.y = (dy / dist) * self.speed
-        super().update(dt)
-        # Advance animation if frames are set
-        if self.anim_frames:
-            self.anim_timer += dt
-            if self.anim_timer >= self.anim_rate:
-                self.anim_timer -= self.anim_rate
-                self.frame_index = (self.frame_index + 1) % len(self.anim_frames)
-        # Constrain
-        self.rect.clamp_ip(pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT))
-
-    def draw(self, surface: pygame.Surface) -> None:
-        if self.anim_frames:
-            # Draw animated sprite.  Ensure the surface size matches the rect
-            frame = self.anim_frames[self.frame_index]
-            if frame.get_size() != self.rect.size:
-                frame = pygame.transform.scale(frame, self.rect.size)
-            surface.blit(frame, self.rect.topleft)
-        else:
-            # Fallback: draw a coloured rectangle
-            pygame.draw.rect(surface, COLOR_ENEMY, self.rect)
-
-
-class RangedEnemy(Enemy):
-    """Enemy that chases the player and occasionally fires projectiles."""
-    def __init__(self, x: float, y: float) -> None:
-        super().__init__(x, y)
-        self.cooldown_ms: int = 1500
-        self.last_shot_time: float = 0.0
-        # slightly slower
-        self.speed = ENEMY_SPEED * 0.6
-        # store bullets
-        self.bullets: List[EnemyBullet] = []
-
-    def update(self, dt: float, player: Player) -> None:
-        # Move like a normal enemy
-        super().update(dt, player)
-        # Fire at intervals
-        now = pygame.time.get_ticks()
-        if now - self.last_shot_time >= self.cooldown_ms:
-            self.last_shot_time = now
-            # compute direction to player
-            dx = player.rect.centerx - self.rect.centerx
-            dy = player.rect.centery - self.rect.centery
-            dist = math.hypot(dx, dy)
-            if dist > 0:
-                vx = (dx / dist) * BULLET_SPEED * 0.6
-                vy = (dy / dist) * BULLET_SPEED * 0.6
-                bullet = EnemyBullet(self.rect.centerx, self.rect.centery, vx, vy)
-                self.bullets.append(bullet)
-        # update bullets
-        for b in self.bullets:
-            b.update(dt)
-        # remove dead bullets
-        self.bullets = [b for b in self.bullets if b.alive]
-
-    def draw(self, surface: pygame.Surface) -> None:
-        # Draw the enemy body (animated if frames assigned)
-        super().draw(surface)
-        # Draw bullets fired by this enemy
-        for b in self.bullets:
-            b.draw(surface)
-
-
-class TurretEnemy(Enemy):
-    """Enemy that remains stationary but fires bullets in multiple directions."""
-    def __init__(self, x: float, y: float) -> None:
-        # Initialise as a standard enemy but with its own cooldown and no movement
-        super().__init__(x, y)
-        # Turret does not move towards the player
-        self.speed = 0.0
-        # Shooting parameters
-        self.cooldown_ms: int = 1200
-        self.last_shot_time: float = 0.0
-        self.bullets: List[EnemyBullet] = []
-        # Default colour used if no animation frames are assigned
-        self.color = (200, 120, 40)
-
-    def update(self, dt: float, player: Player) -> None:
-        # Turret does not chase the player
-        now = pygame.time.get_ticks()
-        if now - self.last_shot_time >= self.cooldown_ms:
-            self.last_shot_time = now
-            # Fire bullets in eight cardinal directions (45 degree increments)
-            for i in range(8):
-                angle = (math.pi / 4.0) * i
-                vx = math.cos(angle) * BULLET_SPEED * 0.6
-                vy = math.sin(angle) * BULLET_SPEED * 0.6
-                self.bullets.append(EnemyBullet(self.rect.centerx, self.rect.centery, vx, vy))
-        # Update bullets
-        for b in self.bullets:
-            b.update(dt)
-        self.bullets = [b for b in self.bullets if b.alive]
-
-    def draw(self, surface: pygame.Surface) -> None:
-        # Draw animated sprite if frames assigned; otherwise coloured rectangle
-        if hasattr(self, 'anim_frames') and self.anim_frames:
-            frame = self.anim_frames[self.frame_index]
-            if frame.get_size() != self.rect.size:
-                frame = pygame.transform.scale(frame, self.rect.size)
-            surface.blit(frame, self.rect.topleft)
-        else:
-            pygame.draw.rect(surface, getattr(self, 'color', COLOR_ENEMY), self.rect)
-        # Draw bullets
-        for b in self.bullets:
-            b.draw(surface)
-
-
-class MiniEnemy(Enemy):
-    """Small enemy spawned by a SplitterEnemy.  Moves quickly and has low health."""
-    def __init__(self, x: float, y: float) -> None:
-        super().__init__(x, y)
-        # Smaller size than normal enemies
-        self.rect = pygame.Rect(x, y, 24, 24)
-        self.max_health = MINI_ENEMY_HEALTH
-        self.health = MINI_ENEMY_HEALTH
-        # Faster movement
-        self.speed = MINI_ENEMY_SPEED
-
-    def draw(self, surface: pygame.Surface) -> None:
-        # Draw mini enemy using scaled animation frames if present, otherwise coloured rect
-        super().draw(surface)
-
-
-class SplitterEnemy(Enemy):
-    """Enemy that splits into two mini enemies upon death."""
-    def __init__(self, x: float, y: float) -> None:
-        super().__init__(x, y)
-        # Different colour to distinguish splitter
-        self.color = (180, 120, 40)
-
-    def draw(self, surface: pygame.Surface) -> None:
-        # Draw splitter enemy using animated sprite if available, otherwise fallback colour
-        super().draw(surface)
-
-    def split(self) -> List[MiniEnemy]:
-        """
-        Create two MiniEnemy instances near the splitter's position.  Offsets are
-        applied to prevent overlapping.  Returns the list of new enemies.
-        """
-        minis: List[MiniEnemy] = []
-        for _ in range(2):
-            offset_x = rand_int(-30, 30)
-            offset_y = rand_int(-30, 30)
-            mx = max(16, min(SCREEN_WIDTH - 16, self.rect.centerx + offset_x))
-            my = max(16, min(SCREEN_HEIGHT - 16, self.rect.centery + offset_y))
-            minis.append(MiniEnemy(mx - 12, my - 12))
-        return minis
-
-
-class TeleporterEnemy(Enemy):
-    """Enemy that teleports to a random location at regular intervals."""
-    def __init__(self, x: float, y: float) -> None:
-        super().__init__(x, y)
-        # Teleporters move slowly when chasing the player
-        self.speed = ENEMY_SPEED * 0.5
-        # Timing for teleportation
-        self.last_teleport_time: float = 0.0
-        # Colour distinct from other enemies
-        self.color = (60, 180, 200)
-
-    def update(self, dt: float, player: Player) -> None:
-        if not self.alive:
-            return
-        # Move toward the player like a standard enemy
-        super().update(dt, player)
-        # Teleport occasionally
-        now = pygame.time.get_ticks()
-        if now - self.last_teleport_time >= TELEPORT_COOLDOWN_MS:
-            self.last_teleport_time = now
-            # Choose a random safe position away from the walls
-            new_x = rand_int(60, SCREEN_WIDTH - 60)
-            new_y = rand_int(60, SCREEN_HEIGHT - 60)
-            self.rect.centerx = new_x
-            self.rect.centery = new_y
-
-    def draw(self, surface: pygame.Surface) -> None:
-        pygame.draw.rect(surface, self.color, self.rect)
-
-
-class Potion:
-    """Collectible potion that heals the player."""
-    def __init__(self, x: float, y: float) -> None:
-        self.rect = pygame.Rect(x, y, 16, 16)
-        self.collected = False
-
-    def draw(self, surface: pygame.Surface) -> None:
-        """
-        Render the potion if it hasn't been collected.  If a static image
-        has been assigned (``Potion.image``), blit it scaled to the
-        potion's rectangle.  Otherwise draw a coloured rectangle.
-        """
-        if not self.collected:
-            image = getattr(Potion, 'image', None)
-            if image:
-                # scale image to potion size if necessary
-                img = image
-                if img.get_size() != self.rect.size:
-                    img = pygame.transform.scale(img, self.rect.size)
-                surface.blit(img, self.rect.topleft)
-            else:
-                pygame.draw.rect(surface, COLOR_POTION, self.rect)
-
-
-class Upgrade:
-    """Collectible upgrade that modifies a player attribute when picked up."""
-    # Mapping from upgrade names to their corresponding icon surfaces.
-    # This dictionary is populated during game initialisation by calling
-    # ``create_upgrade_icons``.  The 'Bomb' entry is assigned separately
-    # with the loaded bomb image.  If a name is not present, a simple
-    # coloured square will be drawn.
-    icons: Dict[str, pygame.Surface] = {}
-
-    def __init__(self, name: str, effect, x: float, y: float) -> None:
-        self.name = name
-        self.effect = effect  # callable that takes a Player and applies the upgrade
-        self.rect = pygame.Rect(x, y, 20, 20)
-        self.collected: bool = False
-
-    def apply(self, player: Player) -> None:
-        """Apply the upgrade to the player and mark as collected."""
-        if not self.collected:
-            # Some effects return a tuple (because of multiple setattrs) but we ignore the return value
-            self.effect(player)
-            self.collected = True
-
-    def draw(self, surface: pygame.Surface) -> None:
-        if self.collected:
-            return
-        # Try to fetch an icon for this upgrade
-        icon = Upgrade.icons.get(self.name)
-        if icon:
-            # Scale icon to rect size if necessary
-            if icon.get_size() != self.rect.size:
-                scaled = pygame.transform.smoothscale(icon, self.rect.size)
-            else:
-                scaled = icon
-            surface.blit(scaled, self.rect.topleft)
-        else:
-            # Fallback: draw a coloured rectangle (bluish tint)
-            pygame.draw.rect(surface, (50, 150, 200), self.rect)
+    def draw(self, surface: pygame.Surface):
+        pygame.draw.circle(surface, (255, 215, 0), (int(self.pos.x), int(self.pos.y)), 3)
 
 
 class Bomb:
-    """A planted bomb that explodes after a fuse and damages nearby enemies."""
-    def __init__(self, x: float, y: float) -> None:
+    def __init__(self, x: float, y: float):
         self.pos = pygame.Vector2(x, y)
-        self.timer_ms: float = BOMB_FUSE_MS
-        self.exploded: bool = False
-        self.alive: bool = True
+        self.fuse = 1.0  # seconds until explosion
+        self.radius = 80.0
+        self.exploded = False
 
-    def update(self, dt: float) -> None:
+    def update(self, dt: float):
         if not self.exploded:
-            self.timer_ms -= dt * 1000.0
-            if self.timer_ms <= 0.0:
+            self.fuse -= dt
+            if self.fuse <= 0:
                 self.exploded = True
-                self.alive = False
 
-    def draw(self, surface: pygame.Surface) -> None:
-        """
-        Render the bomb on screen.  If a custom bomb image has been assigned
-        (via ``Bomb.image``), it is drawn centred on the bomb's position.
-        Otherwise a simple grey circle is used.  Exploded bombs are not
-        drawn.
-        """
+    def draw(self, surface: pygame.Surface, bomb_img: pygame.Surface):
         if not self.exploded:
-            # Try to use the assigned bomb image
-            image = getattr(Bomb, 'image', None)
-            if image:
-                rect = image.get_rect(center=(int(self.pos.x), int(self.pos.y)))
-                surface.blit(image, rect.topleft)
-            else:
-                # Fallback: draw a circle
-                pygame.draw.circle(surface, (100, 100, 100), (int(self.pos.x), int(self.pos.y)), 6)
+            # centre bomb image on position
+            rect = bomb_img.get_rect(center=(int(self.pos.x), int(self.pos.y)))
+            surface.blit(bomb_img, rect)
+        else:
+            # draw explosion circle
+            pygame.draw.circle(surface, (255, 128, 0), (int(self.pos.x), int(self.pos.y)), int(self.radius), 2)
 
 
-class Barrel:
-    """Destructible barrel that blocks bullets.  When destroyed it may drop
-    coins or a potion.  Barrels are decorative; they do not block player or
-    enemy movement for simplicity.
-    """
+class Potion:
+    def __init__(self, x: float, y: float, img: pygame.Surface):
+        self.pos = pygame.Vector2(x, y)
+        self.img = img
+        self.rect = img.get_rect(center=(int(x), int(y)))
 
-    def __init__(self, x: float, y: float) -> None:
-        # Use a modest size for barrels
-        self.rect = pygame.Rect(x, y, 28, 28)
-        self.health: int = BARREL_HEALTH
-        self.alive: bool = True
+    def draw(self, surface: pygame.Surface):
+        surface.blit(self.img, self.rect)
 
-    def damage(self, amount: int) -> None:
-        """Reduce health by amount and mark as dead when health reaches zero."""
+
+class Coin:
+    def __init__(self, x: float, y: float, frames: List[pygame.Surface]):
+        self.pos = pygame.Vector2(x, y)
+        self.frames = frames
+        self.anim_index = 0
+        self.anim_timer = 0.0
+        self.anim_speed = 0.08
+        self.rect = frames[0].get_rect(center=(int(x), int(y)))
+
+    def update(self, dt: float):
+        self.anim_timer += dt
+        if self.anim_timer >= self.anim_speed:
+            self.anim_timer -= self.anim_speed
+            self.anim_index = (self.anim_index + 1) % len(self.frames)
+
+    def draw(self, surface: pygame.Surface):
+        img = self.frames[self.anim_index]
+        # centre coin image on position
+        rect = img.get_rect(center=(int(self.pos.x), int(self.pos.y)))
+        surface.blit(img, rect)
+
+
+class Enemy:
+    def __init__(self, x: float, y: float, frames: Dict[int, List[pygame.Surface]]):
+        self.pos = pygame.Vector2(x, y)
+        self.width = 32
+        self.height = 48
+        self.frames = frames
+        self.direction = DOWN
+        self.anim_index = 0
+        self.anim_timer = 0.0
+        self.anim_speed = 0.15
+        self.speed = 70.0
+        self.health = 40
+        self.alive = True
+
+    @property
+    def rect(self) -> pygame.Rect:
+        return pygame.Rect(int(self.pos.x), int(self.pos.y), self.width, self.height)
+
+    def update(self, dt: float, player: Player):
         if not self.alive:
             return
+        # Move towards player
+        direction_vector = pygame.Vector2(player.x - self.pos.x, player.y - self.pos.y)
+        if direction_vector.length() != 0:
+            direction_vector = direction_vector.normalize()
+            self.pos += direction_vector * self.speed * dt
+            # determine facing direction for animation
+            if abs(direction_vector.x) > abs(direction_vector.y):
+                self.direction = RIGHT if direction_vector.x > 0 else LEFT
+            else:
+                self.direction = DOWN if direction_vector.y > 0 else UP
+        # update animation
+        self.anim_timer += dt
+        if self.anim_timer >= self.anim_speed:
+            self.anim_timer -= self.anim_speed
+            self.anim_index = (self.anim_index + 1) % len(self.frames[self.direction])
+
+    def damage(self, amount: int):
         self.health -= amount
         if self.health <= 0:
             self.alive = False
 
-    # Static image used to draw barrels.  Assigned during game initialisation.
-    image: Optional[pygame.Surface] = None
-
-    def draw(self, surface: pygame.Surface) -> None:
-        """Render the barrel.  If a custom image has been assigned
-        (via ``Barrel.image``), scale it to the barrel's rect and blit it.
-        Otherwise fall back to drawing a simple brown rectangle.  The
-        barrel is only drawn when alive.
-        """
+    def draw(self, surface: pygame.Surface):
         if not self.alive:
             return
-        img = getattr(Barrel, 'image', None)
-        if img:
-            # Scale the icon to fit the barrel's rectangle
-            if img.get_size() != self.rect.size:
-                scaled = pygame.transform.smoothscale(img, self.rect.size)
-            else:
-                scaled = img
-            surface.blit(scaled, self.rect.topleft)
-        else:
-            # Fallback: simple brown rectangle
-            pygame.draw.rect(surface, (150, 100, 50), self.rect)
+        frame = self.frames[self.direction][self.anim_index]
+        surface.blit(frame, (self.pos.x, self.pos.y))
 
 
-class Coin:
-    """Collectible coin that increases the player's gold when picked up."""
+###############################################################################
+# Game logic
+###############################################################################
 
-    def __init__(self, x: float, y: float, value: int = 1) -> None:
-        self.rect = pygame.Rect(x, y, 14, 14)
-        self.value: int = value
-        self.collected: bool = False
+def run_game() -> None:
+    pygame.init()
+    screen = pygame.display.set_mode((800, 600))
+    pygame.display.set_caption('Roguelite POC')
+    clock = pygame.time.Clock()
 
-    def draw(self, surface: pygame.Surface) -> None:
-        """
-        Render the coin if it hasn't been collected.  Coins animate by
-        cycling through a list of frames assigned to ``Coin.frames``.
-        If no frames are available, draw a simple golden circle.
-        """
-        if not self.collected:
-            frames = getattr(Coin, 'frames', None)
-            if frames:
-                # Determine which frame to display based on the current time
-                index = (pygame.time.get_ticks() // 100) % len(frames)
-                frame = frames[index]
-                # Scale the frame to the coin's rectangle
-                if frame.get_size() != self.rect.size:
-                    frame = pygame.transform.scale(frame, self.rect.size)
-                surface.blit(frame, self.rect.topleft)
-            else:
-                pygame.draw.circle(surface, (255, 215, 0), (self.rect.centerx, self.rect.centery), self.rect.width // 2)
+    # Load assets
+    hero_frames = load_hero_frames(os.path.join(ASSET_DIR, 'hero.png'))
+    skeleton_frames = load_enemy_frames(os.path.join(ASSET_DIR, 'skeleton'))
+    goblin_frames = load_enemy_frames(os.path.join(ASSET_DIR, 'monster'))
+    slime_frames = load_slime_frames(os.path.join(ASSET_DIR, 'slime_spritesheet.png'))
+    potion_images = load_potion_images(os.path.join(ASSET_DIR, 'potion_set_16x16.png'))
+    coin_frames = load_coin_frames(os.path.join(ASSET_DIR, 'coin_strip.png'))
+    bomb_img = pygame.image.load(os.path.join(ASSET_DIR, 'bomb.png')).convert_alpha()
 
+    # Create objects
+    player = Player(400.0, 300.0, hero_frames)
+    bullets: List[Bullet] = []
+    bombs: List[Bomb] = []
+    coins: List[Coin] = []
+    potions: List[Potion] = []
+    enemies: List[Enemy] = []
 
-class SpikeTrap:
-    """A trap that alternates between active and inactive phases.  When active
-    and the player (or enemies) touch it, it deals damage.  The trap does
-    not block movement.
-    """
+    # Spawn initial items and enemies
+    def spawn_enemy() -> None:
+        # choose skeleton or goblin randomly
+        f = skeleton_frames if random.random() < 0.5 else goblin_frames
+        x = random.randint(50, 750)
+        y = random.randint(50, 550)
+        enemies.append(Enemy(x, y, f))
 
-    def __init__(self, x: float, y: float) -> None:
-        self.rect = pygame.Rect(x, y, 32, 32)
-        # internal timer tracks elapsed time in milliseconds
-        self.timer_ms: float = 0.0
-        self.active: bool = False
+    def spawn_coin() -> None:
+        x = random.randint(20, 780)
+        y = random.randint(20, 580)
+        coins.append(Coin(x, y, coin_frames))
 
-    def update(self, dt: float) -> None:
-        # accumulate elapsed time
-        self.timer_ms += dt * 1000.0
-        # determine active phase using modulo of total period
-        period = SPIKE_ACTIVE_MS + SPIKE_INACTIVE_MS
-        cycle = self.timer_ms % period
-        self.active = cycle < SPIKE_ACTIVE_MS
+    def spawn_potion() -> None:
+        x = random.randint(20, 780)
+        y = random.randint(20, 580)
+        img = random.choice(potion_images)
+        potions.append(Potion(x, y, img))
 
-    # Static icon used to draw traps.  Created during game initialisation.
-    image: Optional[pygame.Surface] = None
+    for _ in range(3):
+        spawn_enemy()
+        spawn_coin()
+        spawn_potion()
 
-    def draw(self, surface: pygame.Surface) -> None:
-        """Render the spike trap.  If a custom icon has been assigned
-        (via ``SpikeTrap.image``), blit it.  When the trap is active, the
-        icon is tinted red to indicate danger.  Otherwise a dark grey tint
-        is applied.  If no icon is available, draw a coloured rectangle as
-        fallback.
-        """
-        img = getattr(SpikeTrap, 'image', None)
-        if img:
-            # Tint the base icon based on active state
-            base = img
-            # Create a tinted copy
-            surf = base.copy()
-            tint = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
-            # Choose tint colour: red when active, dark grey when inactive
-            tint_color = (220, 50, 50) if self.active else (80, 80, 80)
-            tint.fill(tint_color)
-            surf.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            # Scale to rect if necessary
-            if surf.get_size() != self.rect.size:
-                surf = pygame.transform.smoothscale(surf, self.rect.size)
-            surface.blit(surf, self.rect.topleft)
-        else:
-            # Fallback: simple rectangle with colour indicating state
-            color = (200, 50, 50) if self.active else (80, 80, 80)
-            pygame.draw.rect(surface, color, self.rect)
+    running = True
+    bomb_cooldown = 0.0
+    while running:
+        dt = clock.tick(60) / 1000.0  # delta time in seconds
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running = False
+                elif event.key == pygame.K_SPACE:
+                    # shoot bullet
+                    center_x = player.x + player.width / 2
+                    center_y = player.y + player.height / 2
+                    bullets.append(Bullet(center_x, center_y, player.last_move_dir))
+                elif event.key == pygame.K_b:
+                    # deploy bomb if available and cooldown expired
+                    if player.bombs > 0 and bomb_cooldown <= 0.0:
+                        center = pygame.Vector2(player.x + player.width / 2, player.y + player.height / 2)
+                        bombs.append(Bomb(center.x, center.y))
+                        player.bombs -= 1
+                        bomb_cooldown = 0.5  # half second before next bomb
 
-
-class ShopItem:
-    """An item available for purchase in a shop room.  Contains an effect and
-    a price.  Once purchased, the item cannot be bought again."""
-
-    def __init__(self, name: str, effect, price: int, x: float, y: float) -> None:
-        self.name = name
-        self.effect = effect
-        self.price = price
-        self.rect = pygame.Rect(x, y, 24, 24)
-        self.purchased: bool = False
-        # Assign icon based on upgrade name if available.  Shop items share
-        # the same icons as upgrades.  If not found, ``icon`` remains None
-        # and a coloured rectangle will be drawn instead.
-        self.icon: Optional[pygame.Surface] = Upgrade.icons.get(name)
-
-    def apply(self, player: Player) -> None:
-        """Apply the item's effect to the player and mark as purchased."""
-        if not self.purchased:
-            # Some effects may return multiple assignments; ignore return value
-            self.effect(player)
-            self.purchased = True
-
-    def draw(self, surface: pygame.Surface) -> None:
-        if self.icon and not self.purchased:
-            # Draw the item's icon centred in its rect
-            icon = self.icon
-            if icon.get_size() != self.rect.size:
-                icon = pygame.transform.smoothscale(icon, self.rect.size)
-            surface.blit(icon, self.rect.topleft)
-            # Optionally overlay a semi‑transparent tint if desired to
-            # distinguish shop items; skip for clarity.
-        else:
-            # Simple coloured rectangle: blue for available, grey for purchased
-            color = (40, 100, 160) if not self.purchased else (100, 100, 100)
-            pygame.draw.rect(surface, color, self.rect)
-
-
-class BossEnemy(Enemy):
-    """Boss enemy that uses radial attacks and can spawn minions."""
-    def __init__(self, x: float, y: float) -> None:
-        # Boss has larger size and more health
-        super().__init__(x, y)
-        self.rect = pygame.Rect(x, y, 64, 64)
-        self.max_health = BOSS_HEALTH
-        self.health = BOSS_HEALTH
-        # Boss moves slowly towards the player
-        self.speed = ENEMY_SPEED * 0.4
-        # Timers for special actions
-        self.last_shot_time = 0.0
-        self.last_minion_time = 0.0
-        # Container for bullets fired by the boss
-        self.bullets: List[EnemyBullet] = []
-        # Boss-specific colour
-        self.color = (200, 60, 200)
-
-    def perform_radial_attack(self) -> None:
-        """Fire a circular pattern of enemy bullets evenly spaced around 360 degrees."""
-        for i in range(BOSS_BULLET_COUNT):
-            angle = (2 * math.pi * i) / BOSS_BULLET_COUNT
-            vx = math.cos(angle) * BOSS_BULLET_SPEED
-            vy = math.sin(angle) * BOSS_BULLET_SPEED
-            bullet = EnemyBullet(self.rect.centerx, self.rect.centery, vx, vy)
-            self.bullets.append(bullet)
-
-    def update(self, dt: float, player: Player) -> None:
-        """Move slowly toward the player, perform radial attacks and spawn minions."""
-        if not self.alive:
-            return
-        # Boss moves slowly toward player
-        dx = player.rect.centerx - self.rect.centerx
-        dy = player.rect.centery - self.rect.centery
-        dist = math.hypot(dx, dy)
-        if dist > 0:
-            self.vel.x = (dx / dist) * self.speed
-            self.vel.y = (dy / dist) * self.speed
-        super().update(dt)
-        # Constrain to screen
-        self.rect.clamp_ip(pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT))
-        # Radial bullet attack at intervals
-        now = pygame.time.get_ticks()
-        if now - self.last_shot_time >= BOSS_SHOT_COOLDOWN_MS:
-            self.last_shot_time = now
-            self.perform_radial_attack()
-        # Spawn minions at intervals
-        if now - self.last_minion_time >= BOSS_MINION_COOLDOWN_MS:
-            self.last_minion_time = now
-            # Spawn 2 minions around boss (random offset)
-            return ['spawn_minions']
-        # Update boss bullets
-        for b in self.bullets:
-            b.update(dt)
-        self.bullets = [b for b in self.bullets if b.alive]
-        return []
-
-    def draw(self, surface: pygame.Surface) -> None:
-        # Draw boss body
-        pygame.draw.rect(surface, self.color, self.rect)
-        # Draw boss bullets
-        for b in self.bullets:
-            b.draw(surface)
-
-
-class Game:
-    """High level orchestrator: runs the loop and manages rooms and entities."""
-    def __init__(self) -> None:
-        # Initialise Pygame and create the window.  We do this here rather than
-        # inside run() so that tests which instantiate Game can still operate
-        # with dummy drivers.
-        pygame.init()
-        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-        pygame.display.set_caption("Rogue‑Lite POC")
-        self.clock = pygame.time.Clock()
-        # Load hero frames once; this asset is reused across runs.  Use the
-        # high‑quality 8‑direction hero animations stored in HERO_DIR.  If
-        # HERO_DIR does not contain any frames, the returned mapping will be
-        # empty and fallback drawing will occur (the player will appear as
-        # a coloured rectangle).
-        self.player_frames = load_hero_frames(HERO_DIR)
-        # Fallback: if no frames were loaded from HERO_DIR, fall back to the
-        # original hero spritesheet (hero.png).  This ensures the game
-        # remains playable even if the external hero assets are missing.
-        if not any(self.player_frames.values()):
-            self.player_frames = self.load_hero_frames(os.path.join(os.path.dirname(__file__), 'hero.png'))
-
-        # Load enemy character animations.  We load skeleton and monster
-        # animations from their respective directories.  These will be used
-        # for different enemy types to provide distinct appearances.  If
-        # the directories are empty or missing, the returned mappings may
-        # contain empty lists, and fallback coloured rectangles will be used.
-        self.skeleton_frames: Dict[int, List[pygame.Surface]] = load_hero_frames(SKELETON_DIR)
-        self.monster_frames: Dict[int, List[pygame.Surface]] = load_hero_frames(MONSTER_DIR)
-        # Load enemy and item sprite frames.  These functions must be called
-        # after ``pygame.init()`` so that Pygame surfaces are initialised.
-        # Enemy frames: dictionary mapping colour names to a list of walking frames.
-        self.slime_frames: Dict[str, List[pygame.Surface]] = load_slime_frames(SLIME_SHEET_FILE)
-        # Potion images (four coloured potions).  We'll use the first potion by
-        # default, but the list allows variation in the future.
-        self.potion_images: List[pygame.Surface] = load_potion_images(POTION_SET_FILE)
-        # Coin animation frames (twelve frames).  Coins will cycle through
-        # these frames to create a spinning effect.
-        self.coin_frames: List[pygame.Surface] = load_coin_frames(COIN_STRIP_FILE)
-        # Bomb icon for planted bombs.  A static 16x16 image.
-        try:
-            self.bomb_image: pygame.Surface = pygame.image.load(BOMB_ICON_FILE).convert_alpha()
-        except Exception:
-            # Fallback: simple surface if image missing
-            self.bomb_image = pygame.Surface((16, 16), pygame.SRCALPHA)
-            self.bomb_image.fill((120, 120, 120))
-        # Assign static images to item classes so they can draw themselves
-        # without needing a reference to the Game instance.  Classes check for
-        # these attributes at draw time.
-        Potion.image = self.potion_images[0]
-        Coin.frames = self.coin_frames
-        Bomb.image = self.bomb_image
-
-        # Create and assign icons for environment objects and upgrades.  These
-        # are generated procedurally to enhance clarity while maintaining
-        # a cohesive fantasy theme.  Assign them to static class attributes.
-        # Barrel and spike trap icons
-        Barrel.image = create_barrel_icon()
-        SpikeTrap.image = create_spike_icon()
-        # Generate upgrade icons and assign to the Upgrade class.  This
-        # dictionary maps upgrade names to their respective icons.  The
-        # bomb icon is assigned separately using the loaded bomb image.
-        Upgrade.icons = create_upgrade_icons()
-        # Add Bomb icon by scaling the bomb image to the standard upgrade size
-        Upgrade.icons['Bomb'] = pygame.transform.smoothscale(self.bomb_image, (20, 20))
-        # High score data: {"best_time": int or None, "best_kills": int or None}
-        self.highscore: Dict[str, Optional[int]] = self.load_highscore()
-        # State machine: 'MENU', 'GAME', 'GAME_OVER'
-        self.state: str = 'MENU'
-        # Mouse shooting flag.  When true, the player will continuously
-        # fire bullets toward the cursor while the left mouse button is held.
-        self.left_mouse_down: bool = False
-        # Keep track of whether high score has been updated this run (to avoid
-        # repeatedly writing the file during the game over loop)
-        self.saved_score: bool = False
-        # Immediately reset the game to set up initial variables.  The
-        # game is paused in the menu state until the player starts.
-        self.reset_game()
-
-    def load_hero_frames(self, path: str) -> Dict[int, List[pygame.Surface]]:
-        sheet = pygame.image.load(path).convert_alpha()
-        frames: Dict[int, List[pygame.Surface]] = {UP: [], DOWN: [], LEFT: [], RIGHT: []}
-        # The sheet is 256x128 with 8 columns and 2 rows; each frame 32x64
-        for row in range(2):
-            for col in range(8):
-                frame = sheet.subsurface(pygame.Rect(col * 32, row * 64, 32, 64))
-                # assign frames: first 4 of row 0 -> UP, next 4 -> LEFT; row1: first 4 -> DOWN, next 4 -> RIGHT
-                if row == 0:
-                    if col < 4:
-                        frames[UP].append(frame)
-                    else:
-                        frames[LEFT].append(frame)
-                else:
-                    if col < 4:
-                        frames[DOWN].append(frame)
-                    else:
-                        frames[RIGHT].append(frame)
-        return frames
-
-    def load_room(self, index: int) -> None:
-        room = self.dungeon.get_room(index)
-        self.current_room_index = index
-        # Mark room as visited for minimap
-        if hasattr(self, 'visited_rooms'):
-            self.visited_rooms.add(index)
-        # Reset lists
-        self.enemies = []
-        self.potions = []
-        self.upgrades = []
-        # Reset per‑room currency and environment lists
-        self.coins = []
-        self.barrels = []
-        self.traps = []
-        self.shop_items = []
-        # Determine if this room is a shop.  Shops contain purchasable items
-        # instead of enemies or potions.
-        if room.is_shop:
-            # Spawn up to three unique shop items selected from SHOP_UPGRADES
-            available = list(SHOP_UPGRADES.items())
-            random.shuffle(available)
-            count = min(3, len(available))
-            for i in range(count):
-                name, (effect, price) = available[i]
-                x = rand_int(80, SCREEN_WIDTH - 80)
-                y = rand_int(120, SCREEN_HEIGHT - 120)
-                self.shop_items.append(ShopItem(name, effect, price, x, y))
-            # Clear message and return early
-            self.message = None
-            return
-        # Spawn enemies
-        # If this is the final room, spawn a boss instead of regular enemies
-        if index == ROOM_COUNT - 1:
-            # Boss spawns at centre of screen
-            self.enemies.append(BossEnemy(SCREEN_WIDTH / 2 - 32, SCREEN_HEIGHT / 2 - 32))
-        else:
-            for _ in range(room.enemy_count):
-                x = rand_int(60, SCREEN_WIDTH - 60)
-                y = rand_int(60, SCREEN_HEIGHT - 60)
-                r = random.random()
-                # Spawn Splitter, Teleporter, Turret, Ranged or Melee enemies based on probabilities.
-                # Remaining probability spawns a normal melee enemy.
-                if r < SPLITTER_PROBABILITY:
-                    enemy = SplitterEnemy(x, y)
-                    self.assign_enemy_sprite(enemy)
-                    self.enemies.append(enemy)
-                elif r < SPLITTER_PROBABILITY + TELEPORTER_PROBABILITY:
-                    enemy = TeleporterEnemy(x, y)
-                    self.assign_enemy_sprite(enemy)
-                    self.enemies.append(enemy)
-                elif r < SPLITTER_PROBABILITY + TELEPORTER_PROBABILITY + TURRET_PROBABILITY:
-                    enemy = TurretEnemy(x, y)
-                    self.assign_enemy_sprite(enemy)
-                    self.enemies.append(enemy)
-                elif r < SPLITTER_PROBABILITY + TELEPORTER_PROBABILITY + TURRET_PROBABILITY + 0.25:
-                    enemy = RangedEnemy(x, y)
-                    self.assign_enemy_sprite(enemy)
-                    self.enemies.append(enemy)
-                else:
-                    enemy = Enemy(x, y)
-                    self.assign_enemy_sprite(enemy)
-                    self.enemies.append(enemy)
-        # Spawn potion
-        if room.has_potion:
-            x = rand_int(60, SCREEN_WIDTH - 60)
-            y = rand_int(60, SCREEN_HEIGHT - 60)
-            self.potions.append(Potion(x, y))
-        # Spawn environmental objects (barrels and traps) only in non‑boss rooms
-        if index != ROOM_COUNT - 1:
-            # Barrels
-            barrel_count = rand_int(1, 3)
-            for _ in range(barrel_count):
-                bx = rand_int(80, SCREEN_WIDTH - 80)
-                by = rand_int(120, SCREEN_HEIGHT - 120)
-                self.barrels.append(Barrel(bx, by))
-            # Traps: spawn with moderate probability
-            if random.random() < 0.5:
-                tx = rand_int(80, SCREEN_WIDTH - 80)
-                ty = rand_int(120, SCREEN_HEIGHT - 120)
-                self.traps.append(SpikeTrap(tx, ty))
-        # Clear message
-        self.message = None
-
-    def show_message(self, text: str, duration: float = 2.0) -> None:
-        self.message = text
-        self.message_timer = duration
-
-    def run(self) -> None:
-        """
-        Main game loop implementing a simple state machine.  The loop cycles
-        between menu, gameplay and game over states based on the player's
-        actions.  In the menu, pressing Enter starts a new game; in the
-        game over state, Enter restarts and Esc returns to the menu.
-        """
-        while True:
-            dt = self.clock.tick(60) / 1000.0  # delta time in seconds
-            # Handle events (quit, key presses)
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    pygame.quit()
-                    sys.exit()
-                # Handle keydown events for gameplay
-                if event.type == pygame.KEYDOWN:
-                    # Toggle pause when pressing P
-                    if event.key == pygame.K_p:
-                        if self.state == 'GAME':
-                            self.state = 'PAUSE'
-                        elif self.state == 'PAUSE':
-                            self.state = 'GAME'
-                    # Plant bombs only when playing
-                    if event.key == pygame.K_b and self.state == 'GAME':
-                        if self.player.bombs > 0:
-                            cx = self.player.rect.centerx
-                            cy = self.player.rect.centery
-                            self.bombs.append(Bomb(cx, cy))
-                            self.player.bombs -= 1
-                    # Purchase shop item when pressing E
-                    if event.key == pygame.K_e and self.state == 'GAME':
-                        # Player presses E to buy an item if colliding and has enough gold
-                        for item in self.shop_items:
-                            if not item.purchased and self.player.rect.colliderect(item.rect) and self.gold >= item.price:
-                                item.apply(self.player)
-                                self.gold -= item.price
-                                self.show_message(f"Purchased {item.name}!", duration=2.5)
-
-                # Handle mouse button events for shooting
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    # Start shooting when left mouse button is pressed
-                    if self.state == 'GAME' and not self.game_over:
-                        self.left_mouse_down = True
-                        # Immediate shot when pressed
-                        self.player.shoot_at_target(pygame.mouse.get_pos())
-                if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                    # Stop shooting when left mouse button is released
-                    self.left_mouse_down = False
-            keys = pygame.key.get_pressed()
-
-            # --- Menu state ---
-            if self.state == 'MENU':
-                # Check for start input
-                if keys[pygame.K_RETURN] or keys[pygame.K_SPACE]:
-                    self.reset_game()
-                    self.state = 'GAME'
-                # Draw the menu and continue
-                self.draw_menu()
+        keys = pygame.key.get_pressed()
+        player.update(dt, keys)
+        for bullet in bullets:
+            bullet.update(dt)
+        for bomb in bombs:
+            bomb.update(dt)
+        for coin in coins:
+            coin.update(dt)
+        for enemy in enemies:
+            enemy.update(dt, player)
+        # remove dead bullets
+        bullets = [b for b in bullets if b.alive]
+        # handle bullet/enemy collisions
+        for bullet in bullets:
+            for enemy in enemies:
+                if enemy.alive and enemy.rect.collidepoint(bullet.pos.x, bullet.pos.y):
+                    enemy.damage(10)
+                    bullet.alive = False
+                    break
+        # handle bomb explosions
+        for bomb in bombs:
+            if bomb.exploded and bomb.fuse < 0:
                 continue
-
-            # --- Game state ---
-            if self.state == 'GAME':
-                if not self.game_over:
-                    # Track whether there were any enemies at the start of this update
-                    had_enemies = len(self.enemies) > 0
-                    # Update player movement and dash
-                    self.player.handle_input(keys, dt)
-                    self.player.update(dt)
-                    # Shoot continuously toward the mouse if the left button is held
-                    if self.left_mouse_down:
-                        self.player.shoot_at_target(pygame.mouse.get_pos())
-                    # Update enemies and collect boss commands
-                    spawn_minion_requests: List[str] = []
-                    for enemy in self.enemies:
-                        result = enemy.update(dt, self.player)
-                        if isinstance(enemy, BossEnemy) and isinstance(result, list):
-                            spawn_minion_requests.extend(result)
-                    # Bullet vs enemy collisions
-                    for bullet in self.player.bullets:
-                        for enemy in self.enemies:
-                            if enemy.alive and bullet.alive and enemy.rect.collidepoint(bullet.pos):
-                                enemy.damage(bullet.damage)
-                                bullet.alive = False
-                    # Bullet vs barrel collisions.  Barrels are destroyed by
-                    # bullets but do not block player movement.  Destroyed
-                    # barrels drop coins or potions when removed later.
-                    for bullet in self.player.bullets:
-                        for barrel in self.barrels:
-                            if barrel.alive and bullet.alive and barrel.rect.collidepoint(bullet.pos):
-                                barrel.damage(bullet.damage)
-                                bullet.alive = False
-
-                    # Enemy vs player collisions (melee)
-                    for enemy in self.enemies:
-                        if enemy.alive and self.player.rect.colliderect(enemy.rect):
-                            if not self.player.invulnerable:
-                                if self.player.shield > 0:
-                                    self.player.shield -= 1
-                                    self.show_message("Shield absorbed hit!", duration=1.5)
-                                else:
-                                    self.player.damage(10)
-                            dx = enemy.rect.centerx - self.player.rect.centerx
-                            dy = enemy.rect.centery - self.player.rect.centery
-                            dist = max(math.hypot(dx, dy), 0.1)
-                            enemy.rect.x += int((dx / dist) * 20)
-                            enemy.rect.y += int((dy / dist) * 20)
-
-                    # Enemy bullet collisions
-                    enemy_bullets: List[EnemyBullet] = []
-                    for e in self.enemies:
-                        if isinstance(e, RangedEnemy):
-                            enemy_bullets.extend(e.bullets)
-                        elif isinstance(e, BossEnemy):
-                            enemy_bullets.extend(e.bullets)
-                        elif isinstance(e, TurretEnemy):
-                            enemy_bullets.extend(e.bullets)
-                    for b in enemy_bullets:
-                        if b.alive and self.player.rect.collidepoint(b.pos):
-                            if not self.player.invulnerable:
-                                if self.player.shield > 0:
-                                    self.player.shield -= 1
-                                    self.show_message("Shield absorbed hit!", duration=1.5)
-                                else:
-                                    self.player.damage(b.damage)
-                            b.alive = False
-                    # Process boss spawn requests
-                    if spawn_minion_requests:
-                        for enemy in self.enemies:
-                            if isinstance(enemy, BossEnemy):
-                                for _ in spawn_minion_requests:
-                                    offset_x = rand_int(-80, 80)
-                                    offset_y = rand_int(-80, 80)
-                                    mx = max(32, min(SCREEN_WIDTH - 32, enemy.rect.centerx + offset_x))
-                                    my = max(32, min(SCREEN_HEIGHT - 32, enemy.rect.centery + offset_y))
-                                    if random.random() < 0.25:
-                                        m = RangedEnemy(mx, my)
-                                        self.assign_enemy_sprite(m)
-                                        self.enemies.append(m)
-                                    else:
-                                        m = Enemy(mx, my)
-                                        self.assign_enemy_sprite(m)
-                                        self.enemies.append(m)
-                    # Potion pickup
-                    for potion in self.potions:
-                        if not potion.collected and self.player.rect.colliderect(potion.rect):
-                            potion.collected = True
-                            self.player.heal(POTION_HEAL)
-                    # Upgrade pickup
-                    for upgrade in self.upgrades:
-                        if not upgrade.collected and self.player.rect.colliderect(upgrade.rect):
-                            upgrade.apply(self.player)
-                            self.show_message(f"Picked up {upgrade.name}!", duration=3.0)
-
-                    # Update bombs and handle explosions
-                    # Track bombs that explode during this frame
-                    for bomb in list(self.bombs):
-                        pre_exploded = bomb.exploded
-                        bomb.update(dt)
-                        if not pre_exploded and bomb.exploded:
-                            # Bomb just exploded: damage all enemies within radius
-                            for enemy in self.enemies:
-                                if enemy.alive:
-                                    dist = math.hypot(bomb.pos.x - enemy.rect.centerx, bomb.pos.y - enemy.rect.centery)
-                                    if dist <= BOMB_RADIUS:
-                                        enemy.damage(BOMB_DAMAGE)
-                            # Damage barrels as well
-                            for barrel in self.barrels:
-                                if barrel.alive:
-                                    dist = math.hypot(bomb.pos.x - barrel.rect.centerx, bomb.pos.y - barrel.rect.centery)
-                                    if dist <= BOMB_RADIUS:
-                                        barrel.damage(BOMB_DAMAGE)
-                            # Show explosion message
-                            self.show_message("Boom!", duration=1.0)
-                    # Remove bombs that have exploded
-                    self.bombs = [b for b in self.bombs if not b.exploded]
-
-                    # Handle destroyed barrels: spawn drops and remove
-                    surviving_barrels: List[Barrel] = []
-                    for barrel in self.barrels:
-                        if barrel.alive:
-                            surviving_barrels.append(barrel)
-                        else:
-                            # Barrel destroyed: drop a potion or coins
-                            cx = barrel.rect.centerx
-                            cy = barrel.rect.centery
-                            if random.random() < BARREL_DROP_POTION_PROB:
-                                # Spawn a potion at the barrel's position
-                                self.potions.append(Potion(cx - 8, cy - 8))
-                            else:
-                                # Spawn a few coins
-                                count = rand_int(GOLD_MIN, GOLD_MAX)
-                                for _ in range(count):
-                                    ox = rand_int(-10, 10)
-                                    oy = rand_int(-10, 10)
-                                    self.coins.append(Coin(cx + ox, cy + oy))
-                    self.barrels = surviving_barrels
-
-                    # Update traps and check for collisions with the player
-                    for trap in self.traps:
-                        trap.update(dt)
-                        if trap.active and self.player.rect.colliderect(trap.rect):
-                            if not self.player.invulnerable:
-                                if self.player.shield > 0:
-                                    self.player.shield -= 1
-                                    self.show_message("Shield absorbed hit!", duration=1.5)
-                                else:
-                                    self.player.damage(SPIKE_DAMAGE)
-
-                    # Coin collection
-                    for coin in self.coins:
-                        if not coin.collected and self.player.rect.colliderect(coin.rect):
-                            coin.collected = True
-                            self.gold += coin.value
-                    # Remove collected coins
-                    self.coins = [c for c in self.coins if not c.collected]
-
-                    # Update traps and check for collisions with the player
-                    for trap in self.traps:
-                        trap.update(dt)
-                        if trap.active and self.player.rect.colliderect(trap.rect):
-                            if not self.player.invulnerable:
-                                if self.player.shield > 0:
-                                    self.player.shield -= 1
-                                    self.show_message("Shield absorbed hit!", duration=1.5)
-                                else:
-                                    self.player.damage(SPIKE_DAMAGE)
-
-                    # Coin collection
-                    for coin in self.coins:
-                        if not coin.collected and self.player.rect.colliderect(coin.rect):
-                            coin.collected = True
-                            self.gold += coin.value
-                    # Remove collected coins
-                    self.coins = [c for c in self.coins if not c.collected]
-                    # Remove dead enemies, spawn splits and count kills
-                    dead_count = 0
-                    survivors: List[Enemy] = []
-                    spawned_minis: List[Enemy] = []
-                    for enemy in self.enemies:
-                        if enemy.alive:
-                            survivors.append(enemy)
-                        else:
-                            dead_count += 1
-                            # If this enemy is a splitter, spawn mini enemies
-                            if isinstance(enemy, SplitterEnemy):
-                                # Spawn mini enemies for a dead splitter and assign sprites
-                                minis = enemy.split()
-                                for m in minis:
-                                    self.assign_enemy_sprite(m)
-                                spawned_minis.extend(minis)
-                            # Spawn coins at the location of the dead enemy
-                            # Each dead enemy produces a small number of coins.
-                            cx = enemy.rect.centerx
-                            cy = enemy.rect.centery
-                            coin_count = rand_int(GOLD_MIN, GOLD_MAX)
-                            for _ in range(coin_count):
-                                ox = rand_int(-10, 10)
-                                oy = rand_int(-10, 10)
-                                self.coins.append(Coin(cx + ox, cy + oy))
-                    # Update enemy list: survivors plus newly spawned minis
-                    self.enemies = survivors + spawned_minis
-                    # Increment kill counter by number of dead enemies (splitting does not affect kills)
-                    self.kills += dead_count
-                    # Check room cleared
-                    if had_enemies and not self.enemies and not self.dungeon.get_room(self.current_room_index).cleared:
-                        self.dungeon.get_room(self.current_room_index).cleared = True
-                        if self.current_room_index != ROOM_COUNT - 1:
-                            name, effect = random.choice(list(UPGRADE_TYPES.items()))
-                            ux = rand_int(80, SCREEN_WIDTH - 80)
-                            uy = rand_int(80, SCREEN_HEIGHT - 80)
-                            self.upgrades.append(Upgrade(name, effect, ux, uy))
-                        self.show_message("Room cleared!")
-                    # Update message timer
-                    if self.message:
-                        self.message_timer -= dt
-                        if self.message_timer <= 0:
-                            self.message = None
-                    # Room transitions
-                    room = self.dungeon.get_room(self.current_room_index)
-                    if room.cleared:
-                        if self.player.rect.top <= 0 and UP in room.neighbors:
-                            self.player.rect.top = SCREEN_HEIGHT - self.player.rect.height - 2
-                            self.load_room(room.neighbors[UP])
-                        elif self.player.rect.bottom >= SCREEN_HEIGHT - 1 and DOWN in room.neighbors:
-                            self.player.rect.bottom = self.player.rect.height + 2
-                            self.load_room(room.neighbors[DOWN])
-                        elif self.player.rect.left <= 0 and LEFT in room.neighbors:
-                            self.player.rect.left = SCREEN_WIDTH - self.player.rect.width - 2
-                            self.load_room(room.neighbors[LEFT])
-                        elif self.player.rect.right >= SCREEN_WIDTH - 1 and RIGHT in room.neighbors:
-                            self.player.rect.right = self.player.rect.width + 2
-                            self.load_room(room.neighbors[RIGHT])
-                    # Check victory / defeat
-                    # Check victory / defeat.  Immediately return to the
-                    # menu when the run ends.  Compute elapsed time and
-                    # update highscore before resetting.  This replaces the
-                    # previous behaviour where the player had to press a key
-                    # to exit the game over screen.
-                    if not self.game_over:
-                        if all(r.cleared for r in self.dungeon.rooms):
-                            # Victory: update high score and return to menu
-                            elapsed_ms = pygame.time.get_ticks() - self.start_time
-                            self.save_highscore(elapsed_ms, self.kills)
-                            # Reset run and show menu
-                            self.reset_game()
-                            self.state = 'MENU'
-                            # Skip further updates in this loop iteration
-                            continue
-                        if self.player.health <= 0:
-                            # Defeat: update kills high score and return to menu
-                            elapsed_ms = pygame.time.get_ticks() - self.start_time
-                            self.save_highscore(elapsed_ms, self.kills)
-                            self.reset_game()
-                            self.state = 'MENU'
-                            continue
-                # Draw gameplay scene
-                self.screen.fill(COLOR_BG)
-                pygame.draw.rect(self.screen, COLOR_WALL, pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT), 4)
-                room = self.dungeon.get_room(self.current_room_index)
-                if room.cleared:
-                    door_width = 60
-                    door_thickness = 4
-                    if UP in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, 0, door_width, door_thickness))
-                    if DOWN in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, SCREEN_HEIGHT - door_thickness, door_width, door_thickness))
-                    if LEFT in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(0, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
-                    if RIGHT in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(SCREEN_WIDTH - door_thickness, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
-                for potion in self.potions:
-                    potion.draw(self.screen)
-                for upgrade in self.upgrades:
-                    upgrade.draw(self.screen)
-                # Draw bombs
-                for bomb in self.bombs:
-                    bomb.draw(self.screen)
-                # Draw barrels, traps, coins and shop items
-                for barrel in self.barrels:
-                    barrel.draw(self.screen)
-                for trap in self.traps:
-                    trap.draw(self.screen)
-                for coin in self.coins:
-                    coin.draw(self.screen)
-                for item in self.shop_items:
-                    item.draw(self.screen)
-                for enemy in self.enemies:
-                    enemy.draw(self.screen)
-                self.player.draw(self.screen)
-                self.draw_ui()
-                # Draw shop item prices if we are in a shop room
-                if room.is_shop:
-                    price_font = pygame.font.Font(None, 20)
-                    for item in self.shop_items:
-                        if not item.purchased:
-                            price_surf = price_font.render(f"{item.price}G", True, (255, 215, 0))
-                            price_rect = price_surf.get_rect(center=(item.rect.centerx, item.rect.bottom + 10))
-                            self.screen.blit(price_surf, price_rect)
-                if self.message:
-                    self.draw_message(self.message)
-                pygame.display.flip()
-                continue
-
-            # --- Pause state ---
-            if self.state == 'PAUSE':
-                # Draw current game scene without updates and overlay a pause indicator
-                self.screen.fill(COLOR_BG)
-                pygame.draw.rect(self.screen, COLOR_WALL, pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT), 4)
-                room = self.dungeon.get_room(self.current_room_index)
-                if room.cleared:
-                    door_width = 60
-                    door_thickness = 4
-                    if UP in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, 0, door_width, door_thickness))
-                    if DOWN in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, SCREEN_HEIGHT - door_thickness, door_width, door_thickness))
-                    if LEFT in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(0, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
-                    if RIGHT in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(SCREEN_WIDTH - door_thickness, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
-                # Draw all static entities (no updates)
-                for potion in self.potions:
-                    potion.draw(self.screen)
-                for upgrade in self.upgrades:
-                    upgrade.draw(self.screen)
-                for bomb in self.bombs:
-                    bomb.draw(self.screen)
-                for enemy in self.enemies:
-                    enemy.draw(self.screen)
-                self.player.draw(self.screen)
-                self.draw_ui()
-                # Overlay paused message
-                font = pygame.font.Font(None, 64)
-                pause_text = font.render("Paused", True, (255, 255, 255))
-                rect = pause_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
-                self.screen.blit(pause_text, rect)
-                pygame.display.flip()
-                continue
-
-            # --- Game over state ---
-            if self.state == 'GAME_OVER':
-                # Save highscore once when game_over triggers (only if victory)
-                if not self.saved_score:
-                    elapsed_ms = pygame.time.get_ticks() - self.start_time
-                    # Only update high score on victory (all rooms cleared)
-                    if all(r.cleared for r in self.dungeon.rooms):
-                        self.save_highscore(elapsed_ms, self.kills)
-                    else:
-                        # Even if not victorious, update best kills
-                        self.save_highscore(elapsed_ms, self.kills)
-                    self.saved_score = True
-                # Allow restart or return to menu
-                if keys[pygame.K_RETURN] or keys[pygame.K_SPACE]:
-                    # Reset game state and return to the main menu rather than
-                    # immediately starting a new run.  This allows the player
-                    # to choose when to start again.
-                    self.reset_game()
-                    self.state = 'MENU'
-                    continue
-                if keys[pygame.K_ESCAPE]:
-                    # Esc returns to the menu without resetting run variables
-                    self.state = 'MENU'
-                    continue
-                # Draw final scene (similar to gameplay but no updates)
-                self.screen.fill(COLOR_BG)
-                pygame.draw.rect(self.screen, COLOR_WALL, pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT), 4)
-                room = self.dungeon.get_room(self.current_room_index)
-                if room.cleared:
-                    door_width = 60
-                    door_thickness = 4
-                    if UP in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, 0, door_width, door_thickness))
-                    if DOWN in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect((SCREEN_WIDTH - door_width) // 2, SCREEN_HEIGHT - door_thickness, door_width, door_thickness))
-                    if LEFT in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(0, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
-                    if RIGHT in room.neighbors:
-                        pygame.draw.rect(self.screen, COLOR_BG, pygame.Rect(SCREEN_WIDTH - door_thickness, (SCREEN_HEIGHT - door_width) // 2, door_thickness, door_width))
-                for potion in self.potions:
-                    potion.draw(self.screen)
-                for upgrade in self.upgrades:
-                    upgrade.draw(self.screen)
-                for bomb in self.bombs:
-                    bomb.draw(self.screen)
-                for enemy in self.enemies:
-                    enemy.draw(self.screen)
-                self.player.draw(self.screen)
-                self.draw_ui()
-                if self.message:
-                    self.draw_message(self.message)
-                pygame.display.flip()
-
-    def draw_ui(self) -> None:
-        # Health bar background
-        bar_x, bar_y, bar_w, bar_h = 16, 16, 200, 20
-        pygame.draw.rect(self.screen, COLOR_HEALTH_BG, pygame.Rect(bar_x, bar_y, bar_w, bar_h))
-        # Health bar fill
-        ratio = self.player.health / self.player.max_health
-        if ratio > 0.5:
-            color = COLOR_HEALTH_FG_GOOD
-        elif ratio > 0.2:
-            color = COLOR_HEALTH_FG_WARN
-        else:
-            color = COLOR_HEALTH_FG_BAD
-        pygame.draw.rect(self.screen, color, pygame.Rect(bar_x, bar_y, int(bar_w * ratio), bar_h))
-        # Health text
-        font = pygame.font.Font(None, 24)
-        text = font.render(f"HP: {self.player.health}/{self.player.max_health}", True, (255, 255, 255))
-        self.screen.blit(text, (bar_x, bar_y + bar_h + 4))
-        # Room text
-        rtext = font.render(f"Room {self.current_room_index + 1} / {ROOM_COUNT}", True, (255, 255, 255))
-        self.screen.blit(rtext, (bar_x, bar_y + bar_h + 28))
-        # Draw minimap in the upper right corner
-        self.draw_minimap()
-
-        # Gold display
-        gtext = font.render(f"Gold: {self.gold}", True, (255, 215, 0))
-        self.screen.blit(gtext, (bar_x, bar_y + bar_h + 52))
-
-    def draw_message(self, text: str) -> None:
-        """
-        Render a centred message on the screen.  Supports multi‑line messages by
-        splitting on newline characters and drawing each line beneath the last.
-        """
-        font = pygame.font.Font(None, 48)
-        lines = text.split("\n")
-        total_height = len(lines) * font.get_height() + (len(lines) - 1) * 8
-        start_y = (SCREEN_HEIGHT - total_height) // 2
-        for i, line in enumerate(lines):
-            render = font.render(line, True, (255, 204, 0))
-            rect = render.get_rect(center=(SCREEN_WIDTH // 2, start_y + i * (font.get_height() + 8)))
-            self.screen.blit(render, rect)
-
-    def display_game_over_message(self, victory: bool) -> None:
-        """
-        Compute elapsed time and display a detailed end‑of‑game message.  If the
-        player is victorious, congratulate them; otherwise indicate their demise.
-        """
-        elapsed_ms = pygame.time.get_ticks() - self.start_time
-        total_seconds = elapsed_ms // 1000
-        minutes, seconds = divmod(total_seconds, 60)
-        time_str = f"{minutes}:{seconds:02d}"
-        if victory:
-            title = "You have conquered the dungeon!"
-        else:
-            title = "You died!"
-        message = f"{title}\nTime: {time_str}  Kills: {self.kills}"
-        # Show for longer to allow players to read
-        self.show_message(message, duration=6.0)
-
-    def draw_minimap(self) -> None:
-        """
-        Render a minimap showing the layout of the dungeon.  Visited rooms
-        appear brighter, unvisited rooms are dim, and the current room is
-        highlighted.  The minimap is drawn in the top right corner of the
-        screen and scales automatically based on the dungeon layout.
-        """
-        # Ensure layout positions are available
-        if not hasattr(self, 'map_positions'):
-            return
-        positions = self.map_positions
-        # Compute bounds
-        xs = [pos[0] for pos in positions.values()]
-        ys = [pos[1] for pos in positions.values()]
-        min_x, max_x = min(xs), max(xs)
-        min_y, max_y = min(ys), max(ys)
-        cols = max_x - min_x + 1
-        rows = max_y - min_y + 1
-        # Size per cell and map dimensions
-        cell = 12
-        map_width = cols * cell
-        map_height = rows * cell
-        # Base position (top right with margin)
-        base_x = SCREEN_WIDTH - map_width - 10
-        base_y = 10
-        # Colors
-        visited_color = (140, 220, 255)
-        unvisited_color = (60, 80, 100)
-        current_color = (255, 200, 50)
-        for index, (px, py) in positions.items():
-            x = base_x + (px - min_x) * cell
-            y = base_y + (py - min_y) * cell
-            rect = pygame.Rect(x + 1, y + 1, cell - 2, cell - 2)
-            if index == self.current_room_index:
-                color = current_color
-            elif index in getattr(self, 'visited_rooms', {}):
-                color = visited_color
-            else:
-                color = unvisited_color
-            pygame.draw.rect(self.screen, color, rect)
-
-    # ------------------------------------------------------------------
-    # High score and menu helpers
-    def load_highscore(self) -> Dict[str, Optional[int]]:
-        """
-        Read the high score file from disk.  If the file does not exist or is
-        malformed, return default values.  The returned dictionary has two
-        keys: 'best_time' (milliseconds) and 'best_kills' (integer).
-        """
-        try:
-            with open(HIGHSCORE_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return {
-                        'best_time': data.get('best_time'),
-                        'best_kills': data.get('best_kills'),
-                    }
-        except FileNotFoundError:
-            pass
-        except Exception:
-            # ignore parse errors and fall through to default
-            pass
-        return {'best_time': None, 'best_kills': None}
-
-    def save_highscore(self, elapsed_ms: int, kills: int) -> None:
-        """
-        Update the high score if the new time is faster or the kills count is
-        higher.  Persist to disk.  The elapsed time is in milliseconds.
-        """
-        updated = False
-        # Compare by time: lower is better.  Only consider victories (kills
-        # greater than zero).  If no best_time recorded yet, any value qualifies.
-        best_time = self.highscore.get('best_time')
-        best_kills = self.highscore.get('best_kills')
-        # Update time if this run is faster or if no time exists yet
-        if kills > 0:
-            if best_time is None or elapsed_ms < best_time:
-                self.highscore['best_time'] = elapsed_ms
-                updated = True
-        # Update kills if this run achieves more kills (regardless of victory)
-        if best_kills is None or kills > best_kills:
-            self.highscore['best_kills'] = kills
-            updated = True
-        # Write out if there was an update
-        if updated:
-            try:
-                with open(HIGHSCORE_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(self.highscore, f)
-            except Exception:
-                # If writing fails, ignore errors but keep highscore in memory
-                pass
-
-    def reset_game(self) -> None:
-        """
-        Reset all game state for a new run.  This method is called when
-        starting a game from the menu or after a game over when the player
-        chooses to play again.
-        """
-        # Create a fresh dungeon and reset the current room
-        self.dungeon = Dungeon(ROOM_COUNT)
-        self.current_room_index = 0
-        # Create a new player in the centre of the screen
-        self.player = Player(SCREEN_WIDTH / 2 - 16, SCREEN_HEIGHT / 2 - 24, self.player_frames)
-        # Reset room entities lists
-        self.enemies = []
-        self.potions = []
-        self.upgrades = []
-        # UI state
-        self.message = None
-        self.message_timer = 0.0
-        self.game_over = False
-        # Score tracking
-        self.start_time = pygame.time.get_ticks()
-        self.kills = 0
-        # Load the first room's contents
-        self.load_room(0)
-        # Mark that we haven't saved the score for this run yet
-        self.saved_score = False
-        # Reset bombs
-        self.bombs: List[Bomb] = []
-        # Compute minimap positions and initialise visited rooms
-        self.map_positions = self.dungeon.get_layout_positions()
-        self.visited_rooms: set[int] = {0}
-
-        # Initialise currency and environmental lists.  Gold tracks the
-        # player's current wealth.  Coins, barrels, traps and shop items are
-        # per‑room entities and reset on room load.
-        self.gold: int = 0
-        self.coins: List[Coin] = []
-        self.barrels: List[Barrel] = []
-        self.traps: List[SpikeTrap] = []
-        self.shop_items: List[ShopItem] = []
-
-        # Reset mouse shooting state
-        self.left_mouse_down = False
-
-    def assign_enemy_sprite(self, enemy: Enemy) -> None:
-        """
-        Assign animation frames to an enemy instance based on its type.
-
-        When spawning enemies in ``load_room``, this helper is used to
-        attach the appropriate set of animation frames from the slime
-        spritesheet.  It leaves any enemy that already has frames
-        unchanged.  Mini enemies use scaled down red frames; other
-        specialisations use colour coding to distinguish behaviour.
-        """
-        # Do not override frames if already assigned (e.g. custom boss)
-        if getattr(enemy, 'anim_frames', None):
-            return
-
-        def tint_frames(src_frames: List[pygame.Surface], colour: Tuple[int, int, int]) -> List[pygame.Surface]:
-            """
-            Create tinted copies of the given frames using the provided RGB
-            colour.  Alpha values are preserved.  Uses ``BLEND_RGBA_MULT`` to
-            multiply the frame pixels by the tint colour.
-            """
-            tinted: List[pygame.Surface] = []
-            for f in src_frames:
-                surf = f.copy()
-                # Create a surface of the same size filled with the tint colour
-                tint_surf = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
-                tint_surf.fill(colour)
-                surf.blit(tint_surf, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-                tinted.append(surf)
-            return tinted
-
-        frames: Optional[List[pygame.Surface]] = None
-        # Assign frames based on enemy type.  Use skeleton frames for
-        # melee‑oriented enemies and monster frames for ranged and special
-        # behaviours.  Apply distinct tint colours to differentiate each
-        # behaviour.  If skeleton/monster frames are unavailable, fall back
-        # to slime frames.
-        if isinstance(enemy, MiniEnemy):
-            # Mini enemies use skeleton frames tinted bright red
-            base = self.skeleton_frames.get(DOWN) or []
-            if base:
-                frames = tint_frames(base, (255, 80, 80))
-        elif isinstance(enemy, SplitterEnemy):
-            base = self.skeleton_frames.get(DOWN) or []
-            if base:
-                frames = tint_frames(base, (220, 100, 50))
-        elif isinstance(enemy, RangedEnemy):
-            base = self.monster_frames.get(DOWN) or []
-            if base:
-                frames = tint_frames(base, (80, 80, 255))
-        elif isinstance(enemy, TurretEnemy):
-            base = self.monster_frames.get(DOWN) or []
-            if base:
-                frames = tint_frames(base, (200, 120, 40))
-        elif isinstance(enemy, TeleporterEnemy):
-            base = self.monster_frames.get(DOWN) or []
-            if base:
-                frames = tint_frames(base, (60, 180, 200))
-        elif isinstance(enemy, Enemy):
-            base = self.skeleton_frames.get(DOWN) or []
-            if base:
-                frames = tint_frames(base, (100, 200, 100))
-        # Fallback to slime frames if no skeleton/monster frames found
-        if frames is None:
-            # Determine fallback colour set based on enemy type
-            if isinstance(enemy, MiniEnemy) or isinstance(enemy, SplitterEnemy):
-                frames = self.slime_frames.get('red')
-            elif isinstance(enemy, RangedEnemy):
-                frames = self.slime_frames.get('blue')
-            elif isinstance(enemy, TurretEnemy) or isinstance(enemy, TeleporterEnemy):
-                frames = self.slime_frames.get('yellow')
-            else:
-                frames = self.slime_frames.get('green')
-        if frames:
-            enemy.anim_frames = frames
-            enemy.frame_index = 0
-            enemy.anim_timer = 0.0
-
-    def draw_menu(self) -> None:
-        """Render the start menu with title and high score information."""
-        self.screen.fill(COLOR_BG)
-        title_font = pygame.font.Font(None, 64)
-        text_font = pygame.font.Font(None, 32)
-        # Title
-        title_surface = title_font.render("Rogue‑Lite POC", True, (255, 255, 255))
-        title_rect = title_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 3))
-        self.screen.blit(title_surface, title_rect)
-        # Instructions
-        instr_surface = text_font.render("Press Enter to start", True, (200, 200, 200))
-        instr_rect = instr_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
-        self.screen.blit(instr_surface, instr_rect)
-        # High score display
-        best_time = self.highscore.get('best_time')
-        best_kills = self.highscore.get('best_kills')
-        # Format time as mm:ss
-        if best_time is not None:
-            total_seconds = best_time // 1000
-            minutes, seconds = divmod(total_seconds, 60)
-            time_str = f"{minutes}:{seconds:02d}"
-        else:
-            time_str = "--:--"
-        kills_str = str(best_kills) if best_kills is not None else "--"
-        hs_text = f"Best Time: {time_str}   Best Kills: {kills_str}"
-        hs_surface = text_font.render(hs_text, True, (180, 180, 180))
-        hs_rect = hs_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 40))
-        self.screen.blit(hs_surface, hs_rect)
+            if bomb.exploded:
+                # damage enemies within radius
+                for enemy in enemies:
+                    if enemy.alive and enemy.pos.distance_to(bomb.pos) <= bomb.radius:
+                        enemy.damage(30)
+                # mark as finished to avoid repeated damage
+                bomb.fuse = -1.0
+        # remove finished bombs
+        bombs = [b for b in bombs if not (b.exploded and b.fuse < 0)]
+        # handle player/enemy collision (damage player)
+        for enemy in enemies:
+            if enemy.alive and player.rect.colliderect(enemy.rect):
+                player.health -= 20 * dt
+                if player.health <= 0:
+                    running = False
+        # handle player/coin collision
+        for coin in coins[:]:
+            if player.rect.colliderect(coin.rect):
+                player.coins += 1
+                coins.remove(coin)
+                spawn_coin()
+        # handle player/potion collision
+        for potion in potions[:]:
+            if player.rect.colliderect(potion.rect):
+                player.health = min(player.max_health, player.health + 25)
+                potions.remove(potion)
+                spawn_potion()
+        # occasionally spawn new enemies/items
+        if random.random() < 0.01:
+            spawn_enemy()
+        if random.random() < 0.02:
+            spawn_coin()
+        if random.random() < 0.01:
+            spawn_potion()
+        # reduce bomb cooldown
+        if bomb_cooldown > 0:
+            bomb_cooldown -= dt
+        # drawing
+        screen.fill((27, 27, 43))
+        # draw items
+        for coin in coins:
+            coin.draw(screen)
+        for potion in potions:
+            potion.draw(screen)
+        # draw bombs
+        for bomb in bombs:
+            bomb.draw(screen, bomb_img)
+        # draw enemies
+        for enemy in enemies:
+            enemy.draw(screen)
+        # draw player
+        player.draw(screen)
+        # draw UI (health and coins)
+        font = pygame.font.SysFont('Arial', 18)
+        health_text = font.render(f"Health: {int(player.health)}", True, (255, 255, 255))
+        coin_text = font.render(f"Coins: {player.coins}", True, (255, 215, 0))
+        bomb_text = font.render(f"Bombs: {player.bombs}", True, (200, 200, 200))
+        screen.blit(health_text, (10, 10))
+        screen.blit(coin_text, (10, 30))
+        screen.blit(bomb_text, (10, 50))
         pygame.display.flip()
+    pygame.quit()
 
 
 if __name__ == '__main__':
-    Game().run()
+    run_game()

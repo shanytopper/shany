@@ -115,21 +115,20 @@ class Player {
         this.scene
       );
       this.mesh = result.meshes[0];
-      // Some assets include parent transform nodes as the first entry
-      // in meshes; if the root has no geometry pick the first mesh
-      // with geometry.  This prevents invisible root nodes from
-      // affecting our position and rotation logic.
-      if (!this.mesh.getTotalVertices || this.mesh.getTotalVertices() === 0) {
-        const actualMesh = result.meshes.find((m) => m.getTotalVertices && m.getTotalVertices() > 0);
-        if (actualMesh) this.mesh = actualMesh;
-      }
+      // When using glTF or .babylon assets the first entry in
+      // meshes[] is typically a transform node that holds all child
+      // meshes and skeletons.  We intentionally keep this root node
+      // instead of selecting the first geometry, because the skeleton
+      // influences are bound to this root.  Detaching the geometry
+      // from its root can lead to mismatched scaling (floating heads,
+      // giant feet, etc.).
       this.mesh.checkCollisions = false;
       // Capture all animation groups.  We don't assume any particular
       // naming convention for the groups; instead we simply pause
       // all groups until the player moves.  When moving we will
       // resume playback on every group.  Should your asset contain
       // multiple animations such as idle, walk, run etc. you can
-      // further filter the groups by name (e.g. group.name.toLowerCase().includes("walk"))
+      // further filter the groups by name (e.g. group.name.toLowerCase().includes("walk")).
       this._animations = result.animationGroups || [];
       // If the asset supplies skeletons but no animation groups, we
       // construct synthetic AnimationGroup objects that proxy calls
@@ -157,11 +156,13 @@ class Player {
         });
       }
       // Scale the model down to fit inside the room.  The Dude model is
-      // originally about two metres tall; scaling by 0.015 brings it
-      // into a comfortable range for our Cornell Box.
-      if (this.mesh.scaling) {
-        this.mesh.scaling.scaleInPlace(0.015);
-      }
+      // roughly two metres tall.  Scaling by 0.1 brings the
+      // character to a reasonable height relative to the Cornell Box.
+      // TransformNode inherits scaling; assign a new vector to
+      // uniformly scale the root and its skeleton.  Using a new
+      // Vector3 avoids issues with in‑place scaling on uninitialised
+      // scalars.
+      this.mesh.scaling = new BABYLON.Vector3(0.1, 0.1, 0.1);
     } catch (err) {
       // Fallback: create a simple capsule to represent the character.  We
       // still set up a dummy animation that bobs the capsule up and down

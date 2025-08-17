@@ -165,12 +165,6 @@ class Player {
       // comfortably inside the Cornell Box.  Adjust this value to
       // fine‑tune the relative size of the player.
       this.mesh.scaling = new BABYLON.Vector3(0.02, 0.02, 0.02);
-
-      // Position the player at ground level.  A small positive Y value
-      // ensures the model doesn’t clip into the floor when scaled.  If
-      // your imported model has a different origin adjust this offset
-      // accordingly.
-      this.mesh.position = new BABYLON.Vector3(0, 0.1, 0);
     } catch (err) {
       // Fallback: create a simple capsule to represent the character.  We
       // still set up a dummy animation that bobs the capsule up and down
@@ -268,18 +262,14 @@ class Player {
       let forwardVec = new BABYLON.Vector3(0, 0, 1);
       let rightVec = new BABYLON.Vector3(1, 0, 0);
       if (cam) {
-        // getDirection returns the direction of the camera’s local axis in
-        // world space.  Because our FollowCamera looks at the player from
-        // behind (rotationOffset of 180 degrees), its local Z axis
-        // points toward the player.  To obtain the player’s forward
-        // direction (away from the camera) we negate this vector.
-        forwardVec = cam.getDirection(BABYLON.Axis.Z).negate();
+        // getDirection returns the direction of the local axis in world
+        // space.  We ignore the y component to keep movement on the XZ
+        // plane.  Note that camera.getDirection(Axis.Z) points
+        // forward according to the camera definition.
+        forwardVec = cam.getDirection(BABYLON.Axis.Z);
         forwardVec.y = 0;
         forwardVec.normalize();
-        // Similarly, the camera’s local X axis points to its right, which
-        // corresponds to the player’s left due to the rotation offset.
-        // Negate to convert camera’s right into player’s right.
-        rightVec = cam.getDirection(BABYLON.Axis.X).negate();
+        rightVec = cam.getDirection(BABYLON.Axis.X);
         rightVec.y = 0;
         rightVec.normalize();
       }

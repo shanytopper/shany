@@ -161,8 +161,10 @@ class Player {
       // TransformNode inherits scaling; assign a new vector to
       // uniformly scale the root and its skeleton.  Using a new
       // Vector3 avoids issues with in‑place scaling on uninitialised
-      // scalars.
-      this.mesh.scaling = new BABYLON.Vector3(0.1, 0.1, 0.1);
+      // scalars.  We choose a small factor so the character fits
+      // comfortably inside the Cornell Box.  Adjust this value to
+      // fine‑tune the relative size of the player.
+      this.mesh.scaling = new BABYLON.Vector3(0.02, 0.02, 0.02);
     } catch (err) {
       // Fallback: create a simple capsule to represent the character.  We
       // still set up a dummy animation that bobs the capsule up and down
@@ -469,8 +471,11 @@ class ThirdPersonCamera {
     // distance from the target, heightOffset determines how high above
     // the target the camera sits, and rotationOffset determines the
     // horizontal angle relative to the forward direction.
-    this.camera.radius = 8;
-    this.camera.heightOffset = 3;
+    // Reduce the camera radius and height to accommodate a smaller
+    // character.  These values determine how far behind and above the
+    // player the camera sits.
+    this.camera.radius = 5;
+    this.camera.heightOffset = 2;
     this.camera.rotationOffset = 180; // look from behind
     // Attach controls to the active canvas so the user can orbit around
     // the character using the mouse wheel if desired.

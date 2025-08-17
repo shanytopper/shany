@@ -104,43 +104,122 @@ class Player {
    * @returns {Promise<void>}
    */
   async load() {
-    // The import process returns a collection of loaded meshes and
-    // animation groups.  The identifier "him" is the name of the root
-    // transform in the .babylon file.  Using a non‑empty mesh name here
-    // filters the imported meshes to only those starting with that name.
-    const result = await BABYLON.SceneLoader.ImportMeshAsync(
-      "", // import all meshes
-      Player.rootUrl(),
-      Player.filename(),
-      this.scene
-    );
-    // The first entry in the meshes array is the root transform of the
-    // imported model.  We store a reference to it for movement.
-    this.mesh = result.meshes[0];
-    // Turn off collisions for now to simplify the example.  You can
-    // re‑enable this and define a bounding box later for more realism.
-    this.mesh.checkCollisions = false;
-    // Store the animation groups for later.  For the Dude model the
-    // walking animation is contained in the first group.  See the asset
-    // documentation for details.
-    this._animations = result.animationGroups || [];
-    // Scale the model to fit better inside the room.  Without scaling
-    // the default model appears very large compared to the Cornell Box.
-    this.mesh.scaling.scaleInPlace(0.015);
-    // Position the model slightly above the ground to avoid clipping.
-    this.mesh.position.set(0, 0, 0);
-    // Start the idle animation if available.
-    if (this._animations.length > 0) {
-      this._animations.forEach((ag) => {
-        ag.stop();
-      });
-      // Ensure the first animation loops by enabling looping on all
-      // targeted animations.
-      const first = this._animations[0];
-      first.reset();
-      first.loopAnimation = true;
-      first.play(true);
+    try {
+      // Try to load the free asset from the Babylon.js CDN.  Should this
+      // fail (for example due to network restrictions) we fall back to a
+      // procedurally created capsule so that testing can proceed locally.
+      const result = await BABYLON.SceneLoader.ImportMeshAsync(
+        "", // import all meshes
+        Player.rootUrl(),
+        Player.filename(),
+        this.scene
+      );
+      this.mesh = result.meshes[0];
+      // Some assets include parent transform nodes as the first entry
+      // in meshes; if the root has no geometry pick the first mesh
+      // with geometry.  This prevents invisible root nodes from
+      // affecting our position and rotation logic.
+      if (!this.mesh.getTotalVertices || this.mesh.getTotalVertices() === 0) {
+        const actualMesh = result.meshes.find((m) => m.getTotalVertices && m.getTotalVertices() > 0);
+        if (actualMesh) this.mesh = actualMesh;
+      }
+      this.mesh.checkCollisions = false;
+      // Capture all animation groups.  We don't assume any particular
+      // naming convention for the groups; instead we simply pause
+      // all groups until the player moves.  When moving we will
+      // resume playback on every group.  Should your asset contain
+      // multiple animations such as idle, walk, run etc. you can
+      // further filter the groups by name (e.g. group.name.toLowerCase().includes("walk"))
+      this._animations = result.animationGroups || [];
+      // If the asset supplies skeletons but no animation groups, we
+      // construct synthetic AnimationGroup objects that proxy calls
+      // through beginAnimation and stopAnimation on the skeleton.  The
+      // Dude model in particular provides animation ranges on its
+      // skeleton rather than grouped animations.  We default to
+      // playing frames 0–100 for walking; adjust these frame ranges
+      // according to your own exported model.
+      if (this._animations.length === 0 && result.skeletons && result.skeletons.length > 0) {
+        const skel = result.skeletons[0];
+        // Define a helper to start and stop skeleton animations
+        const startAnimation = () => {
+          // Loop frames 0 to 100 at normal speed
+          this.scene.beginAnimation(skel, 0, 100, true, 1.0);
+        };
+        const stopAnimation = () => {
+          this.scene.stopAnimation(skel);
+        };
+        // Push a proxy object that conforms to the AnimationGroup
+        this._animations.push({
+          play: (loop) => startAnimation(),
+          pause: () => stopAnimation(),
+          reset: () => {},
+          isPaused: true,
+        });
+      }
+      // Scale the model down to fit inside the room.  The Dude model is
+      // originally about two metres tall; scaling by 0.015 brings it
+      // into a comfortable range for our Cornell Box.
+      if (this.mesh.scaling) {
+        this.mesh.scaling.scaleInPlace(0.015);
+      }
+    } catch (err) {
+      // Fallback: create a simple capsule to represent the character.  We
+      // still set up a dummy animation that bobs the capsule up and down
+      // when the player moves.
+      console.warn("Failed to load player asset, using a capsule instead.", err);
+      this.mesh = BABYLON.MeshBuilder.CreateCapsule(
+        "playerCapsule",
+        { height: 2, radius: 0.5, capSubdivisions: 4 },
+        this.scene
+      );
+      this.mesh.checkCollisions = false;
+      this.mesh.position.set(0, 1, 0);
+      // Create a simple animation that moves the capsule up and down to
+      // simulate walking.  The animation will be triggered manually
+      // during update.
+      const frameRate = 30;
+      const bobKeys = [];
+      bobKeys.push({ frame: 0, value: 0 });
+      bobKeys.push({ frame: frameRate / 2, value: 0.1 });
+      bobKeys.push({ frame: frameRate, value: 0 });
+      const bobAnim = new BABYLON.Animation(
+        "bob",
+        "position.y",
+        frameRate,
+        BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+        BABYLON.Animation.ANIMATIONLOOPMODE_CYCLE
+      );
+      bobAnim.setKeys(bobKeys);
+      // Store the single animation in the array to unify logic.
+      this._animations = [
+        {
+          play: (loop) => {
+            this.scene.beginDirectAnimation(this.mesh, [bobAnim], 0, frameRate, loop);
+          },
+          pause: () => {
+            // There is no direct pause for direct animations; simply stop
+            // them by ending all animations on the mesh.
+            this.scene.stopAnimation(this.mesh);
+          },
+          reset: () => {
+            this.mesh.position.y = 1;
+          },
+          isPaused: true,
+        },
+      ];
     }
+    // Position the player slightly above the ground to avoid clipping.
+    this.mesh.position.y = 1;
+    // Start playing the animations but immediately pause them.  We do
+    // this so that the animation timelines are initialised.  When the
+    // player begins moving we will resume playback.
+    this._animations.forEach((ag) => {
+      if (ag.reset) ag.reset();
+      if (ag.play) ag.play(true);
+      // Immediately pause so the idle pose is shown.
+      if (ag.pause) ag.pause();
+      ag.isPaused = true;
+    });
   }
   /**
    * Updates the player's position based on currently pressed keys.  Called
@@ -153,42 +232,84 @@ class Player {
    */
   update(input, deltaTime) {
     if (!this.mesh) return;
-    // Compute direction vector in the XZ plane based on keyboard state.
-    const forward = input.isKeyDown("w") || input.isKeyDown("arrowup");
-    const backward = input.isKeyDown("s") || input.isKeyDown("arrowdown");
-    const left = input.isKeyDown("a") || input.isKeyDown("arrowleft");
-    const right = input.isKeyDown("d") || input.isKeyDown("arrowright");
-    const direction = new BABYLON.Vector3(
-      (right ? 1 : 0) - (left ? 1 : 0),
-      0,
-      (backward ? 1 : 0) - (forward ? 1 : 0)
-    );
-    if (direction.lengthSquared() > 0) {
-      // Normalize direction and scale by speed and deltaTime.
-      direction.normalize();
-      const move = direction.scale(this.speed * deltaTime);
-      // Rotate the movement vector by the player's current rotation so the
-      // movement is relative to where the model is facing.  We only care
-      // about yaw rotation here.
-      const rotationY = this.mesh.rotation.y;
-      const cos = Math.cos(rotationY);
-      const sin = Math.sin(rotationY);
-      const localX = move.x * cos - move.z * sin;
-      const localZ = move.x * sin + move.z * cos;
-      this.mesh.position.x += localX;
-      this.mesh.position.z += localZ;
-      // Update the mesh's orientation to face the direction of travel.
-      const targetAngle = Math.atan2(direction.x, direction.z);
-      this.mesh.rotation.y = targetAngle;
-      // Play the walking animation if defined.
-      if (this._animations.length > 0) {
-        this._animations.forEach((ag) => ag.play(true));
+    // Determine which movement keys are pressed.  We use the camera's
+    // orientation to translate these keys into world‑space vectors so
+    // that pressing "W" always moves the player forward relative to
+    // the camera, rather than along a fixed world axis.  This makes
+    // controls intuitive for a third‑person game.
+    const forwardPressed = input.isKeyDown("w") || input.isKeyDown("arrowup");
+    const backwardPressed = input.isKeyDown("s") || input.isKeyDown("arrowdown");
+    const leftPressed = input.isKeyDown("a") || input.isKeyDown("arrowleft");
+    const rightPressed = input.isKeyDown("d") || input.isKeyDown("arrowright");
+
+    // Compute the desired movement on the local forward (z) and right (x) axes.
+    let inputX = 0;
+    let inputZ = 0;
+    if (forwardPressed) inputZ += 1;
+    if (backwardPressed) inputZ -= 1;
+    if (rightPressed) inputX += 1;
+    if (leftPressed) inputX -= 1;
+
+    // Only move if a directional key is pressed.
+    if (inputX !== 0 || inputZ !== 0) {
+      // Retrieve the active camera.  We expect a FollowCamera but
+      // gracefully handle other camera types.  If there is no active
+      // camera then fall back to world axes.
+      const cam = this.scene.activeCamera;
+      let forwardVec = new BABYLON.Vector3(0, 0, 1);
+      let rightVec = new BABYLON.Vector3(1, 0, 0);
+      if (cam) {
+        // getDirection returns the direction of the local axis in world
+        // space.  We ignore the y component to keep movement on the XZ
+        // plane.  Note that camera.getDirection(Axis.Z) points
+        // forward according to the camera definition.
+        forwardVec = cam.getDirection(BABYLON.Axis.Z);
+        forwardVec.y = 0;
+        forwardVec.normalize();
+        rightVec = cam.getDirection(BABYLON.Axis.X);
+        rightVec.y = 0;
+        rightVec.normalize();
       }
+      // Combine the camera‑relative forward and right vectors.  Positive
+      // inputZ moves forward and positive inputX moves right.  Multiply
+      // inputZ by forwardVec and inputX by rightVec then add them.
+      let moveDirection = forwardVec.scale(inputZ).add(rightVec.scale(inputX));
+      // Normalise to prevent faster diagonal movement.
+      if (moveDirection.lengthSquared() > 0) {
+        moveDirection.normalize();
+      }
+      // Scale by movement speed and deltaTime to obtain per‑frame delta.
+      const scaled = moveDirection.scale(this.speed * deltaTime);
+      // Move the mesh while honouring collisions.  moveWithCollisions
+      // expects a displacement vector in world space.
+      if (typeof this.mesh.moveWithCollisions === "function") {
+        this.mesh.moveWithCollisions(scaled);
+      } else {
+        this.mesh.position.addInPlace(scaled);
+      }
+      // Compute rotation so the character faces the direction of movement.
+      // Note: atan2 takes arguments (y, x) for two‑dimensional vectors.
+      const angle = Math.atan2(moveDirection.x, moveDirection.z);
+      this.mesh.rotation.y = angle;
+      // Resume animations when moving.
+      this._animations.forEach((ag) => {
+        if (ag.isPaused) {
+          if (ag.play) {
+            ag.play(true);
+          }
+          ag.isPaused = false;
+        }
+      });
     } else {
-      // When not moving, pause the animations at their first frame.
-      if (this._animations.length > 0) {
-        this._animations.forEach((ag) => ag.stop());
-      }
+      // Pause animations when stationary.
+      this._animations.forEach((ag) => {
+        if (!ag.isPaused) {
+          if (ag.pause) {
+            ag.pause();
+          }
+          ag.isPaused = true;
+        }
+      });
     }
   }
   /**
@@ -238,20 +359,71 @@ class Environment {
    * @returns {Promise<void>}
    */
   async load() {
-    const result = await BABYLON.SceneLoader.ImportMeshAsync(
-      "", // import entire scene
-      Environment.rootUrl(),
-      Environment.filename(),
-      this.scene
-    );
-    this.meshes = result.meshes;
-    // Optionally, enable collision for the environment to prevent the
-    // player from leaving the room.  Here we demonstrate how to set
-    // collisions on all imported meshes.  Later you can fine tune which
-    // meshes participate in collision detection.
-    this.meshes.forEach((m) => {
-      m.checkCollisions = true;
-    });
+    try {
+      const result = await BABYLON.SceneLoader.ImportMeshAsync(
+        "", // import entire scene
+        Environment.rootUrl(),
+        Environment.filename(),
+        this.scene
+      );
+      this.meshes = result.meshes;
+      this.meshes.forEach((m) => {
+        m.checkCollisions = true;
+      });
+    } catch (err) {
+      console.warn("Failed to load environment asset, constructing a simple room instead.", err);
+      // Create a simple room using boxes for walls, floor and ceiling.
+      const size = 10;
+      // Floor
+      const floor = BABYLON.MeshBuilder.CreateBox(
+        "floor",
+        { width: size, depth: size, height: 0.1 },
+        this.scene
+      );
+      floor.position.y = -0.05;
+      floor.checkCollisions = true;
+      floor.material = new BABYLON.StandardMaterial("floorMat", this.scene);
+      floor.material.diffuseColor = new BABYLON.Color3(0.7, 0.7, 0.7);
+      // Ceiling
+      const ceiling = floor.clone("ceiling");
+      ceiling.position.y = 5;
+      // Back wall
+      const backWall = BABYLON.MeshBuilder.CreateBox(
+        "backWall",
+        { width: size, height: 5, depth: 0.1 },
+        this.scene
+      );
+      backWall.position.z = -size / 2;
+      backWall.position.y = 2.5;
+      backWall.checkCollisions = true;
+      backWall.material = new BABYLON.StandardMaterial("backMat", this.scene);
+      backWall.material.diffuseColor = new BABYLON.Color3(0.8, 0.1, 0.1);
+      // Front wall
+      const frontWall = backWall.clone("frontWall");
+      frontWall.position.z = size / 2;
+      frontWall.material = new BABYLON.StandardMaterial("frontMat", this.scene);
+      frontWall.material.diffuseColor = new BABYLON.Color3(0.1, 0.8, 0.1);
+      // Left wall
+      const leftWall = BABYLON.MeshBuilder.CreateBox(
+        "leftWall",
+        { width: 0.1, height: 5, depth: size },
+        this.scene
+      );
+      leftWall.position.x = -size / 2;
+      leftWall.position.y = 2.5;
+      leftWall.checkCollisions = true;
+      leftWall.material = new BABYLON.StandardMaterial("leftMat", this.scene);
+      leftWall.material.diffuseColor = new BABYLON.Color3(0.1, 0.1, 0.8);
+      // Right wall
+      const rightWall = leftWall.clone("rightWall");
+      rightWall.position.x = size / 2;
+      rightWall.material = new BABYLON.StandardMaterial("rightMat", this.scene);
+      rightWall.material.diffuseColor = new BABYLON.Color3(0.8, 0.8, 0.1);
+      // Ceiling color
+      ceiling.material = new BABYLON.StandardMaterial("ceilMat", this.scene);
+      ceiling.material.diffuseColor = new BABYLON.Color3(0.6, 0.6, 0.6);
+      this.meshes = [floor, ceiling, backWall, frontWall, leftWall, rightWall];
+    }
   }
   /**
    * Root URL to the environment.  Change this if hosting your own assets.
@@ -376,6 +548,10 @@ class Game {
       // Create the follow camera after the player has been loaded.  The
       // constructor attaches the camera to the scene and sets defaults.
       this.camera = new ThirdPersonCamera(this.player.mesh, this.scene);
+      // Set the created camera as the active camera for the scene.  Without
+      // this assignment Babylon.js may default to another camera which
+      // prevents our movement logic from using the correct orientation.
+      this.scene.activeCamera = this.camera.camera;
       // Add a light so the model is visible.  The Cornell Box asset has
       // baked lighting but additional lights improve the player visibility.
       const light = new BABYLON.HemisphericLight(
